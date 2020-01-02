@@ -84,8 +84,32 @@ def init_tfkeras_custom_objects():
     tfkeras.utils.get_custom_objects().update(custom_objects)
 
 
-def preprocess_image(image, image_size):
+def normalize_image(image):
+    """
+    Normalize image by subtracting and dividing by the pre-computed
+    mean and std. dev. Operates on image in-place
+    """
+    mean = [0.485, 0.456, 0.406]
+    std = [0.229, 0.224, 0.225]
+
+    image[..., 0] -= mean[0]
+    image[..., 1] -= mean[1]
+    image[..., 2] -= mean[2]
+    image[..., 0] /= std[0]
+    image[..., 1] /= std[1]
+    image[..., 2] /= std[2]
+
+
+def resize_image(image, image_size):
+    """Resize images to image_size."""
     image_height, image_width = image.shape[:2]
+
+    # check if image needs to be resized
+    if image_height == image_width == image_size:
+        new_image = image.astype(np.float32) / 255.0
+        return new_image, 0, 0, 0
+
+    # scale the image dimensions to fit into the new size without distortion
     if image_height > image_width:
         scale = image_size / image_height
         resized_height = image_size
@@ -94,18 +118,26 @@ def preprocess_image(image, image_size):
         scale = image_size / image_width
         resized_height = int(image_height * scale)
         resized_width = image_size
+
+    # Resize the input image to fit
     image = cv2.resize(image, (resized_width, resized_height))
-    new_image = np.ones((image_size, image_size, 3), dtype=np.float32) * 128.
+
     offset_h = (image_size - resized_height) // 2
     offset_w = (image_size - resized_width) // 2
-    new_image[offset_h:offset_h + resized_height, offset_w:offset_w + resized_width] = image.astype(np.float32)
-    new_image /= 255.
-    mean = [0.485, 0.456, 0.406]
-    std = [0.229, 0.224, 0.225]
-    new_image[..., 0] -= mean[0]
-    new_image[..., 1] -= mean[1]
-    new_image[..., 2] -= mean[2]
-    new_image[..., 0] /= std[0]
-    new_image[..., 1] /= std[1]
-    new_image[..., 2] /= std[2]
+
+    # Paste the input image into the center of a grey image of target size
+    new_image = np.ones((image_size, image_size, 3), dtype=np.float32) * 128.
+    new_image[offset_h:offset_h + resized_height,
+              offset_w:offset_w + resized_width] = image.astype(np.float32)
+
+    new_image /= 255.0
+
     return new_image, scale, offset_h, offset_w
+
+
+def preprocess_image(image, image_size):
+    resized_image, scale, offset_h, offset_w = resize_image(image, image_size)
+
+    normalize_image(resized_image)
+
+    return resized_image, scale, offset_h, offset_w
