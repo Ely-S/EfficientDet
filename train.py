@@ -104,7 +104,7 @@ def create_callbacks(training_model, prediction_model, validation_generator, arg
         checkpoint = keras.callbacks.ModelCheckpoint(
             os.path.join(
                 args.snapshot_path,
-                '{dataset_type}_{{epoch:02d}}_{{loss:.4f}}_{{val_loss:.4f}}.h5'.format(dataset_type=args.dataset_type)
+                '{dataset_type}_epoch-{{epoch:03d}}_loss-{{loss:.5f}}_val-loss-{{val_loss:.5f}}.h5'.format(dataset_type=args.dataset_type)
             ),
             verbose=1,
             # save_best_only=True,
@@ -326,8 +326,9 @@ def main(args=None):
                                                 file_hash=file_hash)
             model.load_weights(weights_path, by_name=True)
         else:
-            print('Loading model, this may take a second...')
+            print('Loading weights, this may take a second...')
             model.load_weights(args.snapshot, by_name=True)
+            print("done loading model")
 
     # freeze backbone layers
     if args.freeze_backbone:
