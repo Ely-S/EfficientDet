@@ -1,3 +1,7 @@
+# Status
+
+This is my custom fork of EfficientDet. My goal is to make this more modular, better documented, more useful, and add tests.
+
 # EfficientDet
 This is an implementation of [EfficientDet](https://arxiv.org/pdf/1911.09070.pdf) for object detection on Keras and Tensorflow. The project is based on [fizyr/keras-retinanet](https://github.com/fizyr/keras-retinanet)
 and the [qubvel/efficientnet](https://github.com/qubvel/efficientnet). 
