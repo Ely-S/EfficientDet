@@ -6,6 +6,7 @@ from functools import reduce
 # from keras_ import EfficientNetB0, EfficientNetB1, EfficientNetB2
 # from keras_ import EfficientNetB3, EfficientNetB4, EfficientNetB5, EfficientNetB6
 
+import tensorflow.keras as tfk
 from tensorflow.keras import layers
 from tensorflow.keras import initializers
 from tensorflow.keras import models
@@ -202,9 +203,12 @@ def build_class_head(width, depth, num_classes=20, num_anchors=9):
         name='pyramid_classification',
         **options
     )(outputs)
+
     # (b, num_anchors_this_feature_map, 4)
     outputs = layers.Reshape((-1, num_classes))(outputs)
-    outputs = layers.Activation('sigmoid')(outputs)
+
+    #   move  this layer because tfjs can't deal with it here
+    #   outputs = layers.Activation('sigmoid')(outputs)
 
     return models.Model(inputs=inputs, outputs=outputs, name='class_head')
 
@@ -239,6 +243,9 @@ def efficientdet(phi, num_classes=20, weighted_bifpn=False, freeze_bn=False, sco
 
     classification = [class_head(feature) for feature in features]
     classification = layers.Concatenate(axis=1, name='classification')(classification)
+
+    classification = layers.Activation('sigmoid')(classification)
+    # Moving sigmoid layer here helps tfjs parse it without changing the output
 
     model = models.Model(inputs=[image_input], outputs=[regression, classification], name='efficientdet')
 

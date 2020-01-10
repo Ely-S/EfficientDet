@@ -17,7 +17,7 @@ def test_apply_bbox_deltas():
                 [0, 0, 1, 1],
                 [.5, .5, .6, .6]
             ]
-        ]
+        ],
     )
 
     # deltas is the same shape as boxes

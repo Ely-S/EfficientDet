@@ -14,7 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 """
 
-# import keras
 from tensorflow import keras
 
 import numpy as np
@@ -35,7 +34,7 @@ class PriorProbability(keras.initializers.Initializer):
 
     def __call__(self, shape, dtype=None):
         # set bias to -log((1 - p)/p) for foreground
-        result = np.ones(shape, dtype=np.float32) *
-            -math.log((1 - self.probability)  / self.probability)
+        result = np.ones(shape, dtype=np.float32
+        ) * -math.log((1 - self.probability)  / self.probability)
 
         return result

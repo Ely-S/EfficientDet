@@ -45,7 +45,7 @@ model, prediction_model = efficientdet(
     weighted_bifpn=weighted_bifpn,
     num_classes=num_classes,
     score_threshold=score_threshold,
-    # drop_connect_rate=0,  # Remove dropout layers
+    drop_connect_rate=0,  # Remove dropout layers
 )
 
 prediction_model.load_weights(model_path, by_name=True)

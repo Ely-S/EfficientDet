@@ -1,10 +1,10 @@
 # import keras
 from tensorflow import keras
-
 import tensorflow as tf
 
 # for compat with refactor
 from RegressBoxes import RegressBoxes
+from ClipBoxes import ClipBoxes
 
 
 class BatchNormalization(keras.layers.BatchNormalization):
@@ -31,7 +31,7 @@ class BatchNormalization(keras.layers.BatchNormalization):
 
     def get_config(self):
         config = super(BatchNormalization, self).get_config()
-        # TFJS COnverter does not understand this
+        # @NOTE: TFJS COnverter does not understand this
         config.update({"freeze": self.freeze})
         return config
 
@@ -184,30 +184,6 @@ def filter_detections(
     return [boxes, scores, labels]
 
 
-class ClipBoxes(keras.layers.Layer):
-    """
-    Keras layer to clip box values to lie inside a given shape.
-    """
-
-    def call(self, inputs, **kwargs):
-        image, boxes = inputs
-
-        shape = keras.backend.cast(keras.backend.shape(image), keras.backend.floatx())
-
-        height = shape[1]
-        width = shape[2]
-
-        x1 = tf.clip_by_value(boxes[:, :, 0], 0, width - 1)
-        y1 = tf.clip_by_value(boxes[:, :, 1], 0, height - 1)
-        x2 = tf.clip_by_value(boxes[:, :, 2], 0, width - 1)
-        y2 = tf.clip_by_value(boxes[:, :, 3], 0, height - 1)
-
-        return keras.backend.stack([x1, y1, x2, y2], axis=2)
-
-    def compute_output_shape(self, input_shape):
-        return input_shape[1]
-
-
 class FilterDetections(keras.layers.Layer):
     """
     Keras layer for filtering detections using score threshold and NMS.
@@ -308,15 +284,13 @@ class FilterDetections(keras.layers.Layer):
             Dictionary containing the parameters of this layer.
         """
         config = super(FilterDetections, self).get_config()
-        config.update(
-            {
-                "nms": self.nms,
-                "class_specific_filter": self.class_specific_filter,
-                "nms_threshold": self.nms_threshold,
-                "score_threshold": self.score_threshold,
-                "max_detections": self.max_detections,
-                "parallel_iterations": self.parallel_iterations,
-            }
-        )
+        config.update({
+            "nms": self.nms,
+            "class_specific_filter": self.class_specific_filter,
+            "nms_threshold": self.nms_threshold,
+            "score_threshold": self.score_threshold,
+            "max_detections": self.max_detections,
+            "parallel_iterations": self.parallel_iterations,
+        })
 
         return config
