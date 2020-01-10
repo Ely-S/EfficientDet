@@ -4,6 +4,9 @@ url = "https://pypi.org/simple"
 verify_ssl = true
 
 [dev-packages]
+flake8 = "*"
+pylint = "*"
+black = "*"
 
 [packages]
 keras = "==2.2.5"
@@ -14,6 +17,11 @@ tensorflow-gpu = "==1.15.0"
 progressbar2 = "*"
 numpy = "*"
 cv2 = "*"
+pytest = "*"
+kito = "*"
 
 [requires]
 python_version = "3.7"
+
+[pipenv]
+allow_prereleases = true

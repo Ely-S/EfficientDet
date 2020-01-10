@@ -209,7 +209,7 @@ def build_class_head(width, depth, num_classes=20, num_anchors=9):
     return models.Model(inputs=inputs, outputs=outputs, name='class_head')
 
 
-def efficientdet(phi, num_classes=20, weighted_bifpn=False, freeze_bn=False, score_threshold=0.01):
+def efficientdet(phi, num_classes=20, weighted_bifpn=False, freeze_bn=False, score_threshold=0.01, **bbkwargs):
     assert phi in range(7)
     input_size = image_sizes[phi]
     input_shape = (input_size, input_size, 3)
@@ -220,18 +220,23 @@ def efficientdet(phi, num_classes=20, weighted_bifpn=False, freeze_bn=False, sco
     w_head = w_bifpn
     d_head = 3 + int(phi / 3)
     backbone_cls = backbones[phi]
+
     # features = backbone_cls(include_top=False, input_shape=input_shape, weights=weights)(image_input)
-    features = backbone_cls(input_tensor=image_input, freeze_bn=freeze_bn)
+    features = backbone_cls(input_tensor=image_input, freeze_bn=freeze_bn, **bbkwargs)
+
     if weighted_bifpn:
         for i in range(d_bifpn):
             features = build_wBiFPN(features, w_bifpn, i, freeze_bn=freeze_bn)
     else:
         for i in range(d_bifpn):
             features = build_BiFPN(features, w_bifpn, i, freeze_bn=freeze_bn)
+
     regress_head = build_regress_head(w_head, d_head)
     class_head = build_class_head(w_head, d_head, num_classes=num_classes)
+
     regression = [regress_head(feature) for feature in features]
     regression = layers.Concatenate(axis=1, name='regression')(regression)
+
     classification = [class_head(feature) for feature in features]
     classification = layers.Concatenate(axis=1, name='classification')(classification)
 
