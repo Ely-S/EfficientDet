@@ -31,7 +31,7 @@ class BatchNormalization(keras.layers.BatchNormalization):
 
     def get_config(self):
         config = super(BatchNormalization, self).get_config()
-        # @NOTE: TFJS COnverter does not understand this
+        # @NOTE: TFJS Converter does not understand this
         config.update({"freeze": self.freeze})
         return config
 
