@@ -394,6 +394,7 @@ def efficientdet(
     weighted_bifpn=False,
     freeze_bn=False,
     score_threshold=0.01,
+    no_filter=False,
     **bbkwargs,
 ):
     assert phi in range(7)
@@ -441,20 +442,23 @@ def efficientdet(
 
     # Don't implement filter detections as layer so it can be implemented as a basic js function
     # filter detections (apply NMS / score threshold / select top-k)
-    prediction_model = models.Model(
-        inputs=[image_input, anchors_input],
-        outputs=[boxes, classification],
-        name="efficientdet_p",
-    )
+    if no_filter:
+        prediction_model = models.Model(
+            inputs=[image_input, anchors_input],
+            outputs=[boxes, classification],
+            name="efficientdet_p",
+        )
 
-    return model, prediction_model
+        return model, prediction_model
 
     # filter detections (apply NMS / score threshold / select top-k)
     detections = FilterDetections(
         name="filtered_detections", score_threshold=score_threshold
     )([boxes, classification])
+
     prediction_model = models.Model(
         inputs=[image_input, anchors_input], outputs=detections, name="efficientdet_p"
     )
+
     return model, prediction_model
 

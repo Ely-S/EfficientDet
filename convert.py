@@ -45,6 +45,7 @@ model, prediction_model = efficientdet(
     weighted_bifpn=weighted_bifpn,
     num_classes=num_classes,
     score_threshold=score_threshold,
+    no_filter=True,
     drop_connect_rate=0,  # Remove dropout layers
 )
 
