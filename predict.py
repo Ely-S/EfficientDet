@@ -20,9 +20,9 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    "--not-weighted",
+    "--weighted",
     default=False,
-    help="Run with an unweighted biFPN model." "Defaults to use weighted BiFPN",
+    help="Run with an weighted biFPN model." "Defaults to use unweighted BiFPN.",
 )
 
 parser.add_argument("--model", required=True, help="path to .h5 file")
@@ -32,8 +32,6 @@ parser.add_argument("image")
 args = parser.parse_args()
 
 os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_visible_devices
-
-weighted_bifpn = not args.not_weighted
 
 classes = [
     "aeroplane",
@@ -70,7 +68,7 @@ anchors = anchors_for_shape((image_size, image_size))
 
 model, prediction_model = efficientdet(
     phi=args.phi,
-    weighted_bifpn=weighted_bifpn,
+    weighted_bifpn=args.weighted,
     num_classes=num_classes,
     score_threshold=score_threshold,
     anchors=anchors
