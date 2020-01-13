@@ -1,10 +1,11 @@
-from model import efficientdet
+import argparse
 import os
 
 import tensorflowjs as tfjs
 from kito import reduce_keras_model
 
-import argparse
+from utils.anchors import anchors_for_shape
+from model import efficientdet
 
 parser = argparse.ArgumentParser(description="Convert to tfjs")
 parser.add_argument("h5file", type=str, help="path to h5 file")
@@ -40,6 +41,12 @@ image_size = image_sizes[phi]
 num_classes = VOC_CLASSES
 score_threshold = 0.5
 
+image_sizes = (512, 640, 768, 896, 1024, 1280, 1408)
+image_size = image_sizes[args.phi]
+
+anchors = anchors_for_shape((image_size, image_size))
+
+
 model, prediction_model = efficientdet(
     phi=phi,
     weighted_bifpn=weighted_bifpn,
@@ -47,6 +54,7 @@ model, prediction_model = efficientdet(
     score_threshold=score_threshold,
     no_filter=True,
     drop_connect_rate=0,  # Remove dropout layers
+    anchors=anchors # Inclde anchor boxes in the output
 )
 
 prediction_model.load_weights(model_path, by_name=True)

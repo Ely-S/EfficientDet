@@ -35,9 +35,6 @@ os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_visible_devices
 
 weighted_bifpn = not args.not_weighted
 
-image_sizes = (512, 640, 768, 896, 1024, 1280, 1408)
-image_size = image_sizes[args.phi]
-
 classes = [
     "aeroplane",
     "bicycle",
@@ -62,14 +59,21 @@ classes = [
 ]
 
 num_classes = len(classes)
+
 score_threshold = 0.5
 colors = [np.random.randint(0, 256, 3).tolist() for i in range(num_classes)]
+
+image_sizes = (512, 640, 768, 896, 1024, 1280, 1408)
+image_size = image_sizes[args.phi]
+
+anchors = anchors_for_shape((image_size, image_size))
 
 model, prediction_model = efficientdet(
     phi=args.phi,
     weighted_bifpn=weighted_bifpn,
     num_classes=num_classes,
     score_threshold=score_threshold,
+    anchors=anchors
 )
 
 prediction_model.load_weights(args.model, by_name=True)
@@ -87,12 +91,11 @@ h, w = image.shape[:2]
 image, scale, offset_h, offset_w = preprocess_image(image, image_size=image_size)
 
 inputs = np.expand_dims(image, axis=0)
-anchors = anchors_for_shape((image_size, image_size))
 
 # run network
 start = time.time()
 boxes_list, scores, labels = prediction_model.predict_on_batch(
-    [np.expand_dims(image, axis=0), np.expand_dims(anchors, axis=0)]
+    [np.expand_dims(image, axis=0)]
 )
 
 
