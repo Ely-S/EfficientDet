@@ -6,6 +6,7 @@ from functools import reduce
 # from keras_ import EfficientNetB0, EfficientNetB1, EfficientNetB2
 # from keras_ import EfficientNetB3, EfficientNetB4, EfficientNetB5, EfficientNetB6
 
+import numpy as np
 import tensorflow as tf
 import tensorflow.keras as tfk
 from tensorflow.keras import layers
@@ -420,24 +421,32 @@ def efficientdet(
         inputs=[image_input], outputs=[regression, classification], name="efficientdet"
     )
 
+    model_inputs = [image_input]
+
     # Optionally allow anchors to be baked into the model.
     # this is useful for exporting a single package to js
     if anchors is not None:
-        # anchors_input = tf.tile(tf.expand_dims(tf.constant(anchors), axis=0), (tf.shape(regression)[0], 1, 1))
-        tensor=tf.expand_dims(tf.constant(anchors), axis=0)
-        anchors_input = layers.Input(tensor=tensor)
+        anchor_array = np.expand_dims(anchors, axis=0)
+
+        box_predicter = RegressBoxes(
+            name="boxes", anchor_shape=anchor_array.shape)
+        box_predicter.set_anchors(anchor_array)
+        boxes = box_predicter([regression])
+
     else:
+        # apply predicted regression to anchors
         anchors_input = layers.Input((None, 4))
-    
-    # apply predicted regression to anchors
-    boxes = RegressBoxes(name="boxes")([anchors_input, regression])
+        boxes = RegressBoxes(name="boxes")([anchors_input, regression])
+        
+        model_inputs.append(anchors_input)
+
     boxes = ClipBoxes(name="clipped_boxes")([image_input, boxes])
 
     # Don't implement filter detections as layer so it can be implemented as a basic js function
     # filter detections (apply NMS / score threshold / select top-k)
     if no_filter:
         prediction_model = models.Model(
-            inputs=[image_input, anchors_input],
+            inputs=model_inputs,
             outputs=[boxes, classification],
             name="efficientdet_p",
         )
@@ -446,11 +455,12 @@ def efficientdet(
 
     # filter detections (apply NMS / score threshold / select top-k)
     detections = FilterDetections(
-        name="filtered_detections", score_threshold=score_threshold
+        name="filtered_detections",
+        score_threshold=score_threshold
     )([boxes, classification])
 
     prediction_model = models.Model(
-        inputs=[image_input, anchors_input], outputs=detections, name="efficientdet_p"
+        inputs=model_inputs, outputs=detections, name="efficientdet_p"
     )
 
     return model, prediction_model

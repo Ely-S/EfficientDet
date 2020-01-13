@@ -7,6 +7,14 @@ from kito import reduce_keras_model
 from utils.anchors import anchors_for_shape
 from model import efficientdet
 
+import argparse
+import time
+import os
+
+from model import efficientdet
+from utils import preprocess_image
+from utils.anchors import anchors_for_shape
+
 parser = argparse.ArgumentParser(description="Convert to tfjs")
 parser.add_argument("h5file", type=str, help="path to h5 file")
 parser.add_argument("out_dir", help="will create this directory if doesn't exist")
@@ -42,7 +50,7 @@ num_classes = VOC_CLASSES
 score_threshold = 0.5
 
 image_sizes = (512, 640, 768, 896, 1024, 1280, 1408)
-image_size = image_sizes[args.phi]
+image_size = image_sizes[phi]
 
 anchors = anchors_for_shape((image_size, image_size))
 
@@ -54,7 +62,7 @@ model, prediction_model = efficientdet(
     score_threshold=score_threshold,
     no_filter=True,
     drop_connect_rate=0,  # Remove dropout layers
-    anchors=anchors # Inclde anchor boxes in the output
+    anchors=anchors   # Include anchor boxes in the output
 )
 
 prediction_model.load_weights(model_path, by_name=True)

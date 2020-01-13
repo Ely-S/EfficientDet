@@ -95,7 +95,9 @@ inputs = np.expand_dims(image, axis=0)
 # run network
 start = time.time()
 boxes_list, scores, labels = prediction_model.predict_on_batch(
-    [np.expand_dims(image, axis=0)]
+    [
+        np.expand_dims(image, axis=0),
+    ]
 )
 
 

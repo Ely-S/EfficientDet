@@ -1,12 +1,11 @@
 from tensorflow import keras
-
 import numpy as np
 
 # These are the default arguments for regress boxes.
 # They are immutable because default arguments should never
 # be mutated
-default_mean = np.array([0, 0, 0, 0], dtype='float32')
-default_std = np.array([0.2, 0.2, 0.2, 0.2], dtype='float32')
+default_mean = np.array([0, 0, 0, 0], dtype="float32")
+default_std = np.array([0.2, 0.2, 0.2, 0.2], dtype="float32")
 default_mean.setflags(write=False)
 default_std.setflags(write=False)
 
@@ -16,7 +15,12 @@ class RegressBoxes(keras.layers.Layer):
     Keras layer for applying regression values to boxes.
     """
 
-    def __init__(self, mean=default_mean, std=default_std, *args, **kwargs):
+    dtype = "float32"
+    saved_anchors = False
+
+    def __init__(
+        self, mean=default_mean, std=default_std, anchor_shape=None, *args, **kwargs
+    ):
         """
         Initializer for the RegressBoxes layer.
 
@@ -27,25 +31,47 @@ class RegressBoxes(keras.layers.Layer):
         if isinstance(mean, (list, tuple)):
             mean = np.array(mean)
         elif not isinstance(mean, np.ndarray):
-            raise ValueError('Expected mean to be a np.ndarray,'
-                             f' list or tuple. Received: {type(mean)}')
+            raise ValueError(
+                "Expected mean to be a np.ndarray,"
+                f" list or tuple. Received: {type(mean)}"
+            )
 
         if isinstance(std, (list, tuple)):
             std = np.array(std)
         elif not isinstance(std, np.ndarray):
-            raise ValueError('Expected std to be a np.ndarray,'
-                             f' list or tuple. Received: {type(std)}')
+            raise ValueError(
+                "Expected std to be a np.ndarray,"
+                f" list or tuple. Received: {type(std)}"
+            )
+
+        if isinstance(anchor_shape, (list, tuple)):
+            anchor_shape = np.array(anchor_shape)
+        elif  anchor_shape and not isinstance(anchor_shape, np.ndarray):
+            raise ValueError(
+                "Expected anchor_shape to be a np.ndarray,"
+                f" list or tuple. Received: {type(std)}"
+            )
 
         self.mean = mean
         self.std = std
+        self.anchor_shape = anchor_shape
+
         super(RegressBoxes, self).__init__(*args, **kwargs)
+
+        if anchor_shape is not None:
+            self.anchors = self.add_weight(
+                name="anchors",
+                dtype="float32",
+                shape=anchor_shape,
+                initializer="ones",
+                trainable=False,
+            )
 
     def call(self, inputs, **kwargs):
         """
-
         Inputs contains an array of anchors boxes and array of predicted
         deltas from those anchor boxes.
-        
+
         inputs has shape (2, B, N, 4).
 
         2=anchors and predicted deltas. 
@@ -53,26 +79,53 @@ class RegressBoxes(keras.layers.Layer):
         N=is the number of predicted boxes for each image
         4=box coordinates   
         """
-        anchors, predicted_deltas = inputs
-        return apply_bbox_deltas(anchors, predicted_deltas,
-                                 mean=self.mean, std=self.std)
+        if self.saved_anchors:
+            anchors = self.anchors
+            predicted_deltas = inputs[0]
+        else:
+            anchors, predicted_deltas = inputs
+
+        return apply_bbox_deltas(
+            anchors, predicted_deltas, mean=self.mean, std=self.std
+        )
 
     def compute_output_shape(self, input_shape):
-        return input_shape[0]
+        if self.saved_anchors:
+            return self.anchors
+        elif len(input_shape) == 2:
+            return input_shape[0]
+        else:
+            raise ValueError(
+                self.__class__,
+                "needs to either get anchors as an input"
+                "or set before use with set_anchors()",
+            )
+
+    def set_anchors(self, anchors: np.array):
+        """
+        Save anchor boxes as layer weights.
+
+        This is a meaningfuly named wrapper around set_weights().
+        """
+        self.saved_anchors = True
+        self.set_weights([anchors.astype("float32")])
 
     def get_config(self):
         config = super(RegressBoxes, self).get_config()
-        config.update({
-            'mean': self.mean.tolist(),
-            'std': self.std.tolist(),
-        })
+        config.update(
+            {
+                "mean": self.mean.tolist(),
+                "std": self.std.tolist(),
+                "anchor_shape": self.anchor_shape.tolist(),
+            }
+        )
 
         return config
 
 
-def apply_bbox_deltas(boxes: np.array, deltas: np.array,
-                      mean=default_mean,
-                      std=default_std) -> np.array:
+def apply_bbox_deltas(
+    boxes: np.array, deltas: np.array, mean=default_mean, std=default_std
+) -> np.array:
     """
     Applies deltas (usually regression results) to boxes (usually anchors).
 
@@ -95,15 +148,18 @@ def apply_bbox_deltas(boxes: np.array, deltas: np.array,
     :rtype: np.array
     """
 
+    # subtract x2s from x1s
     widths = boxes[:, :, 2] - boxes[:, :, 0]
+    # subtract y2s from y1s
     heights = boxes[:, :, 3] - boxes[:, :, 1]
 
-    x1 = boxes[:, :, 0] + (deltas[:, :, 0] * std[0] + mean[0]) * widths
+    # stack these to multiply them by [x1, y1, x2, y2]
+    scales = keras.backend.stack([widths, heights, widths, heights], axis=2)
 
-    y1 = boxes[:, :, 1] + (deltas[:, :, 1] * std[1] + mean[1]) * heights
-    x2 = boxes[:, :, 2] + (deltas[:, :, 2] * std[2] + mean[2]) * widths
-    y2 = boxes[:, :, 3] + (deltas[:, :, 3] * std[3] + mean[3]) * heights
+    normalized_deltas = deltas[:, :] * std + mean
 
-    pred_boxes = keras.backend.stack([x1, y1, x2, y2], axis=2)
+    # scale normalized deltas by their dimension size and add to anchors
+    bboxes = boxes[:, :] + normalized_deltas * scales
 
-    return pred_boxes
+    return bboxes
+
