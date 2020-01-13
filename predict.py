@@ -22,6 +22,7 @@ parser.add_argument(
 parser.add_argument(
     "--weighted",
     default=False,
+    action="store_true",
     help="Run with an weighted biFPN model." "Defaults to use unweighted BiFPN.",
 )
 
@@ -32,6 +33,9 @@ parser.add_argument("image")
 args = parser.parse_args()
 
 os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_visible_devices
+
+if not args.weighted and "weighted" in args.model:
+    print("WARNING: model", args.model, "might be weighted. If so, pass --weighted flag.")
 
 classes = [
     "aeroplane",
