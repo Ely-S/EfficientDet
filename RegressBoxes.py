@@ -162,4 +162,3 @@ def apply_bbox_deltas(
     bboxes = boxes[:, :] + normalized_deltas * scales
 
     return bboxes
-
