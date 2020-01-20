@@ -41,15 +41,6 @@ backbones = [
 ]
 
 
-class SigmoidLayer(keras.layers.Layer):
-    def call(self, x):
-        return keras.backend.sigmoid(x)
-
-    @tf_utils.shape_type_conversion
-    def compute_output_shape(self, input_shape):
-        return input_shape
-
-
 def DepthwiseConvBlock(kernel_size, strides, name, freeze_bn=False):
     f1 = layers.DepthwiseConv2D(
         kernel_size=kernel_size,
@@ -367,9 +358,7 @@ def build_class_head(width, depth, num_classes=20, num_anchors=9):
 
     # (b, num_anchors_this_feature_map, 4)
     outputs = layers.Reshape((-1, num_classes))(outputs)
-
-    #   move  this layer because tfjs can't deal with it here
-    #   outputs = layers.Activation('sigmoid')(outputs)
+    outputs = layers.Activation('sigmoid')(outputs)
 
     return models.Model(inputs=inputs, outputs=outputs, name="class_head")
 
@@ -392,7 +381,7 @@ def efficientdet(
     w_bifpn = w_bifpns[phi]
     d_bifpn = 2 + phi
     w_head = w_bifpn
-    d_head = 3 + int(phi / 3)
+    box_head_depth = 3 + int(phi / 3)
     backbone_cls = backbones[phi]
 
     # features = backbone_cls(include_top=False, input_shape=input_shape, weights=weights)(image_input)
@@ -405,17 +394,14 @@ def efficientdet(
         for i in range(d_bifpn):
             features = build_BiFPN(features, w_bifpn, i, freeze_bn=freeze_bn)
 
-    regress_head = build_regress_head(w_head, d_head)
-    class_head = build_class_head(w_head, d_head, num_classes=num_classes)
+    regress_head = build_regress_head(w_head, box_head_depth)
+    class_head = build_class_head(w_head, box_head_depth, num_classes=num_classes)
 
     regression = [regress_head(feature) for feature in features]
     regression = layers.Concatenate(axis=1, name="regression")(regression)
 
     classification = [class_head(feature) for feature in features]
     classification = layers.Concatenate(axis=1, name="classification")(classification)
-
-    classification = SigmoidLayer()(classification)
-    # Moving sigmoid layer here helps tfjs parse it without changing the output
 
     model = models.Model(
         inputs=[image_input], outputs=[regression, classification], name="efficientdet"

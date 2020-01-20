@@ -39,6 +39,7 @@ from keras_applications.imagenet_utils import decode_predictions
 from keras_applications.imagenet_utils import preprocess_input as _preprocess_input
 from tensorflow.python.keras.utils import tf_utils
 from tensorflow import keras
+import tensorflow as tf
 
 from utils import get_submodules_from_kwargs
 from layers import BatchNormalization
@@ -226,7 +227,7 @@ def mb_conv_block(inputs, block_args, activation, drop_rate=None, prefix='', fre
                           kernel_initializer=CONV_KERNEL_INITIALIZER,
                           name=prefix + 'expand_conv')(inputs)
         x = BatchNormalization(freeze=freeze_bn, axis=bn_axis, name=prefix + 'expand_bn')(x)
-        x = SwishLayer(name=prefix + 'expand_activation')(x)
+        x = layers.Activation(activation, name=prefix + 'expand_activation')(x)
     else:
         x = inputs
 
@@ -238,8 +239,7 @@ def mb_conv_block(inputs, block_args, activation, drop_rate=None, prefix='', fre
                                depthwise_initializer=CONV_KERNEL_INITIALIZER,
                                name=prefix + 'dwconv')(x)
     x = BatchNormalization(freeze=freeze_bn, axis=bn_axis, name=prefix + 'bn')(x)
-    x = SwishLayer(name=prefix + 'activation')(x)
-    # x = layers.Activation(activation, name=prefix + 'activation')(x)
+    x = layers.Activation(activation, name=prefix + 'activation')(x)
 
     # Squeeze and Excitation phase
     if has_se:
@@ -289,15 +289,6 @@ def mb_conv_block(inputs, block_args, activation, drop_rate=None, prefix='', fre
         x = layers.add([x, inputs], name=prefix + 'add')
 
     return x
-
-
-class SwishLayer(keras.layers.Layer):
-    def call(self, x):
-        return x * keras.backend.sigmoid(x)
-    
-    @tf_utils.shape_type_conversion
-    def compute_output_shape(self, input_shape):
-        return input_shape
 
 
 def EfficientNet(width_coefficient,
@@ -394,7 +385,13 @@ def EfficientNet(width_coefficient,
             img_input = input_tensor
 
     bn_axis = 3 if backend.image_data_format() == 'channels_last' else 1
-    activation = 'swish' # get_swish(**kwargs)
+    
+    # The original uses
+    #    activation = get_swish(**kwargs)
+    # but this version needs to use a string because the
+    # python function cannot be serialized and loaded in tfjs.
+    # The Swish activation function is registered in __init__.init_keras_custom_objects
+    activation = 'swish'
 
     # Build stem
     x = img_input
@@ -404,11 +401,8 @@ def EfficientNet(width_coefficient,
                       use_bias=False,
                       kernel_initializer=CONV_KERNEL_INITIALIZER,
                       name='stem_conv')(x)
-    
     x = BatchNormalization(freeze=freeze_bn, axis=bn_axis, name='stem_bn')(x)
-    x = SwishLayer(name="stem_bn_swish")(x)
-    # x = layers.Activation(activation, name='stem_activation')(x)
-
+    x = layers.Activation(activation, name='stem_activation')(x)
 
     # Build blocks
     num_blocks_total = sum(block_args.num_repeat for block_args in blocks_args)

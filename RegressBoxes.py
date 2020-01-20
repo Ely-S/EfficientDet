@@ -60,7 +60,7 @@ class RegressBoxes(keras.layers.Layer):
 
         if anchor_shape is not None:
             self.anchors = self.add_weight(
-                name="anchors",
+                name="anchor_boxes_baked",
                 dtype="float32",
                 shape=anchor_shape,
                 initializer="ones",

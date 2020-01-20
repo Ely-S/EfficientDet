@@ -28,6 +28,15 @@ parser.add_argument(
     default=False,
     help="use a model model with weighted biFPN layers. currently not supported",
 )
+
+
+parser.add_argument(
+    "--phi", type=int, default=0,
+    required=True, help="phi constant between 0 and 7 inclusive"
+)
+
+
+
 parser.add_argument("--quantization_dtype", default=None)
 
 args = parser.parse_args()
@@ -39,7 +48,7 @@ os.environ["CUDA_VISIBLE_DEVICES"] = ""
 model_path = args.h5file  #'pascal_10_0.6209_1.3075_0.7892.h5'
 tfjs_target_dir = args.out_dir
 
-phi = 1
+phi = args.phi
 weighted_bifpn = args.weighted
 
 VOC_CLASSES = 20
