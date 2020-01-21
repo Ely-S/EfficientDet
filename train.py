@@ -28,6 +28,7 @@ import tensorflow as tf
 from tensorflow import keras
 import tensorflow.keras.backend as K
 from tensorflow.keras.optimizers import Adam, SGD
+import tensorflow_addons as tfa
 
 from augmentor.color import VisualEffect
 from augmentor.misc import MiscEffect
@@ -338,14 +339,26 @@ def main(args=None):
         for i in range(1, [227, 329, 329, 374, 464, 566, 656][args.phi]):
             model.layers[i].trainable = False
 
-    # compile model
+
+    # The Optimizer
+    # See https://github.com/shaoanlu/dogs-vs-cats-redux/blob/master/opt_experiment.ipynb
+    # for benchmark of optimizers.
     #@TOOD: Tune this
     optimizer = SGD(lr=.08, decay=4e-5, momentum=0.9) 
-    focal_loss = focal(alpha=.25, gamma=1.5)
+
+    #@TODO: Add Exponential Decay
+
+    # alpha and gamma values come from the EfficientDet paper
+    focal_loss = tfa.losses.SigmoidFocalCrossEntropy(alpha=.25, gamma=1.5)
+
+    loss = tf.keras.losses.Huber()
+
+    # compile model
+    #@TODO: Add Early Stopping
     model.compile(optimizer=optimizer, loss={
-        'regression': smooth_l1(),
+        'regression': loss,
         'classification': focal_loss
-    }, )
+    })
 
     # print(model.summary())
 
