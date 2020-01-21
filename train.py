@@ -28,7 +28,6 @@ import tensorflow as tf
 from tensorflow import keras
 import tensorflow.keras.backend as K
 from tensorflow.keras.optimizers import Adam, SGD
-import tensorflow_addons as tfa
 
 from augmentor.color import VisualEffect
 from augmentor.misc import MiscEffect
@@ -349,7 +348,10 @@ def main(args=None):
     #@TODO: Add Exponential Decay
 
     # alpha and gamma values come from the EfficientDet paper
-    focal_loss = tfa.losses.SigmoidFocalCrossEntropy(alpha=.25, gamma=1.5)
+    focal_loss = focal(alpha=.25, gamma=1.5)
+
+    # note: tfa is not supported by tf 1.15.0
+    # focal_loss = tfa.losses.SigmoidFocalCrossEntropy(alpha=.25, gamma=1.5)
 
     loss = tf.keras.losses.Huber()
 
