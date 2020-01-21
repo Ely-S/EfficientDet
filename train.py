@@ -106,7 +106,7 @@ def create_callbacks(training_model, prediction_model, validation_generator, arg
                 args.snapshot_path,
                 '{dataset_type}_epoch-{{epoch:03d}}_loss-{{loss:.5f}}_val-loss-{{val_loss:.5f}}.h5'.format(dataset_type=args.dataset_type)
             ),
-            verbose=1,
+            verbose=2,
             # save_best_only=True,
             # monitor="mAP",
             # mode='max'
@@ -260,12 +260,14 @@ def parse_args(args):
     csv_parser.add_argument('--val-annotations-path',
                             help='Path to CSV file containing annotations for validation (optional).')
 
-    parser.add_argument('--snapshot', help='Resume training from a snapshot.')
+    parser.add_argument('--verbose', help='Keras fit_generator verbose setting', default=1, type=int)
+
+    parser.add_argument('--snapshot', default="imagenet", help='Resume training from a snapshot.')
     parser.add_argument('--freeze-backbone', help='Freeze training of backbone layers.', action='store_true')
     parser.add_argument('--freeze-bn', help='Freeze training of BatchNormalization layers.', action='store_true')
     parser.add_argument('--weighted-bifpn', help='Use weighted BiFPN', action='store_true')
 
-    parser.add_argument('--batch-size', help='Size of the batches.', default=1, type=int)
+    parser.add_argument('--batch-size', help='Size of the batches.', default=32, type=int)
     parser.add_argument('--phi', help='Hyper parameter phi', default=0, type=int, choices=(0, 1, 2, 3, 4, 5, 6))
     parser.add_argument('--gpu', help='Id of the GPU to use (as reported by nvidia-smi).')
     parser.add_argument('--num_gpus', help='Number of GPUs to use for parallel processing.', type=int, default=0)
@@ -337,9 +339,12 @@ def main(args=None):
             model.layers[i].trainable = False
 
     # compile model
-    model.compile(optimizer=Adam(lr=1e-3), loss={
+    #@TOOD: Tune this
+    optimizer = SGD(lr=.08, decay=4e-5, momentum=0.9) 
+    focal_loss = focal(alpha=.25, gamma=1.5)
+    model.compile(optimizer=optimizer, loss={
         'regression': smooth_l1(),
-        'classification': focal()
+        'classification': focal_loss
     }, )
 
     # print(model.summary())
@@ -361,7 +366,7 @@ def main(args=None):
         steps_per_epoch=args.steps,
         initial_epoch=0,
         epochs=args.epochs,
-        verbose=1,
+        verbose=args.verbose,
         callbacks=callbacks,
         workers=args.workers,
         use_multiprocessing=args.multiprocessing,
