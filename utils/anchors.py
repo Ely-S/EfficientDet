@@ -33,7 +33,8 @@ AnchorParameters.default = AnchorParameters(
     sizes=[32, 64, 128, 256, 512],
     strides=[8, 16, 32, 64, 128],
     ratios=np.array([0.5, 1, 2], keras.backend.floatx()),
-    scales=np.array([2 ** 0, 2 ** (1.0 / 3.0), 2 ** (2.0 / 3.0)], keras.backend.floatx()),
+    scales=np.array([2 ** 0, 2 ** (1.0 / 3.0), 2 **
+                     (2.0 / 3.0)], keras.backend.floatx()),
 )
 
 
@@ -65,16 +66,20 @@ def anchor_targets_bbox(
                       last column defines anchor states (-1 for ignore, 0 for bg, 1 for fg).
     """
 
-    assert (len(image_group) == len(annotations_group)), "The length of the images and annotations need to be equal."
-    assert (len(annotations_group) > 0), "No data received to compute anchor targets for."
+    assert (len(image_group) == len(annotations_group)
+            ), "The length of the images and annotations need to be equal."
+    assert (len(annotations_group) >
+            0), "No data received to compute anchor targets for."
     for annotations in annotations_group:
         assert ('bboxes' in annotations), "Annotations should contain bboxes."
         assert ('labels' in annotations), "Annotations should contain labels."
 
     batch_size = len(image_group)
 
-    regression_batch = np.zeros((batch_size, anchors.shape[0], 4 + 1), dtype=keras.backend.floatx())
-    labels_batch = np.zeros((batch_size, anchors.shape[0], num_classes + 1), dtype=keras.backend.floatx())
+    regression_batch = np.zeros(
+        (batch_size, anchors.shape[0], 4 + 1), dtype=keras.backend.floatx())
+    labels_batch = np.zeros(
+        (batch_size, anchors.shape[0], num_classes + 1), dtype=keras.backend.floatx())
 
     # compute labels and regression targets
     for index, (image, annotations) in enumerate(zip(image_group, annotations_group)):
@@ -94,12 +99,15 @@ def anchor_targets_bbox(
             labels_batch[
                 index, positive_indices, annotations['labels'][argmax_overlaps_inds[positive_indices]].astype(int)] = 1
 
-            regression_batch[index, :, :-1] = bbox_transform(anchors, annotations['bboxes'][argmax_overlaps_inds, :])
+            regression_batch[index, :, :-1] = bbox_transform(
+                anchors, annotations['bboxes'][argmax_overlaps_inds, :])
 
         # ignore anchors outside of image
         if image.shape:
-            anchors_centers = np.vstack([(anchors[:, 0] + anchors[:, 2]) / 2, (anchors[:, 1] + anchors[:, 3]) / 2]).T
-            indices = np.logical_or(anchors_centers[:, 0] >= image.shape[1], anchors_centers[:, 1] >= image.shape[0])
+            anchors_centers = np.vstack(
+                [(anchors[:, 0] + anchors[:, 2]) / 2, (anchors[:, 1] + anchors[:, 3]) / 2]).T
+            indices = np.logical_or(
+                anchors_centers[:, 0] >= image.shape[1], anchors_centers[:, 1] >= image.shape[0])
 
             labels_batch[index, indices, -1] = -1
             regression_batch[index, indices, -1] = -1
@@ -128,7 +136,8 @@ def compute_gt_annotations(
         argmax_overlaps_inds: ordered overlaps indices
     """
 
-    overlaps = compute_overlap(anchors.astype(np.float64), annotations.astype(np.float64))
+    overlaps = compute_overlap(anchors.astype(
+        np.float64), annotations.astype(np.float64))
     argmax_overlaps_inds = np.argmax(overlaps, axis=1)
     max_overlaps = overlaps[np.arange(overlaps.shape[0]), argmax_overlaps_inds]
 
@@ -157,10 +166,12 @@ def layer_shapes(image_shape, model):
     for layer in model.layers[1:]:
         nodes = layer._inbound_nodes
         for node in nodes:
-            input_shapes = [shape[inbound_layer.name] for inbound_layer in node.inbound_layers]
+            input_shapes = [shape[inbound_layer.name]
+                            for inbound_layer in node.inbound_layers]
             if not input_shapes:
                 continue
-            shape[layer.name] = layer.compute_output_shape(input_shapes[0] if len(input_shapes) == 1 else input_shapes)
+            shape[layer.name] = layer.compute_output_shape(
+                input_shapes[0] if len(input_shapes) == 1 else input_shapes)
 
     return shape
 
@@ -172,7 +183,8 @@ def make_shapes_callback(model):
 
     def get_shapes(image_shape, pyramid_levels):
         shape = layer_shapes(image_shape, model)
-        image_shapes = [shape["P{}".format(level)][1:3] for level in pyramid_levels]
+        image_shapes = [shape["P{}".format(level)][1:3]
+                        for level in pyramid_levels]
         return image_shapes
 
     return get_shapes
@@ -190,7 +202,8 @@ def guess_shapes(image_shape, pyramid_levels):
         A list of image shapes at each pyramid level.
     """
     image_shape = np.array(image_shape[:2])
-    image_shapes = [(image_shape + 2 ** x - 1) // (2 ** x) for x in pyramid_levels]
+    image_shapes = [(image_shape + 2 ** x - 1) // (2 ** x)
+                    for x in pyramid_levels]
     return image_shapes
 
 
@@ -231,7 +244,8 @@ def anchors_for_shape(
             ratios=anchor_params.ratios,
             scales=anchor_params.scales
         )
-        shifted_anchors = shift(feature_map_shapes[idx], anchor_params.strides[idx], anchors)
+        shifted_anchors = shift(
+            feature_map_shapes[idx], anchor_params.strides[idx], anchors)
         all_anchors = np.append(all_anchors, shifted_anchors, axis=0)
 
     return all_anchors.astype(np.float32)
@@ -264,7 +278,8 @@ def shift(feature_map_shape, stride, anchors):
     # reshape to (K*A, 4) shifted anchors
     A = anchors.shape[0]
     K = shifts.shape[0]
-    all_anchors = (anchors.reshape((1, A, 4)) + shifts.reshape((1, K, 4)).transpose((1, 0, 2)))
+    all_anchors = (anchors.reshape((1, A, 4)) +
+                   shifts.reshape((1, K, 4)).transpose((1, 0, 2)))
     all_anchors = all_anchors.reshape((K * A, 4))
 
     return all_anchors
@@ -333,12 +348,14 @@ def bbox_transform(anchors, gt_boxes, mean=None, std=None):
     if isinstance(mean, (list, tuple)):
         mean = np.array(mean)
     elif not isinstance(mean, np.ndarray):
-        raise ValueError('Expected mean to be a np.ndarray, list or tuple. Received: {}'.format(type(mean)))
+        raise ValueError(
+            'Expected mean to be a np.ndarray, list or tuple. Received: {}'.format(type(mean)))
 
     if isinstance(std, (list, tuple)):
         std = np.array(std)
     elif not isinstance(std, np.ndarray):
-        raise ValueError('Expected std to be a np.ndarray, list or tuple. Received: {}'.format(type(std)))
+        raise ValueError(
+            'Expected std to be a np.ndarray, list or tuple. Received: {}'.format(type(std)))
 
     anchor_widths = anchors[:, 2] - anchors[:, 0]
     anchor_heights = anchors[:, 3] - anchors[:, 1]
