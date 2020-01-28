@@ -119,7 +119,7 @@ def main(args=None):
     anchors = utils.anchors.anchors_for_shape(image_size)
 
     info = tfds.builder(datasetName).info
-    num_classes = info.features['label'].num_classes
+    num_classes = info.features['labels'].num_classes
 
     def preprocess_one(x):
         image = x['image'].numpy()

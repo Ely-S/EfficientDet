@@ -386,7 +386,7 @@ def efficientdet(
     score_threshold=0.01,
     no_filter=False,
     anchors=None,
-    **bbkwargs,
+    **bbkwargs
 ):
     assert phi in range(7)
     input_size = image_sizes[phi]
