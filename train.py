@@ -353,12 +353,10 @@ def main(args=None):
     # note: tfa is not supported by tf 1.15.0
     # focal_loss = tfa.losses.SigmoidFocalCrossEntropy(alpha=.25, gamma=1.5)
 
-    loss = tf.keras.losses.Huber()
-
     # compile model
     #@TODO: Add Early Stopping
     model.compile(optimizer=optimizer, loss={
-        'regression': loss,
+        'regression': smooth_l1(),
         'classification': focal_loss
     })
 

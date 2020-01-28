@@ -35,7 +35,8 @@ args = parser.parse_args()
 os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_visible_devices
 
 if not args.weighted and "weighted" in args.model:
-    print("WARNING: model", args.model, "might be weighted. If so, pass --weighted flag.")
+    print("WARNING: model", args.model,
+          "might be weighted. If so, pass --weighted flag.")
 
 classes = [
     "aeroplane",
@@ -60,7 +61,7 @@ classes = [
     "tvmonitor",
 ]
 
-num_classes = len(classes)
+num_classes = len(classes)  # 80
 
 score_threshold = 0.5
 colors = [np.random.randint(0, 256, 3).tolist() for i in range(num_classes)]
@@ -90,7 +91,8 @@ src_image = image.copy()
 image = image[:, :, ::-1]
 h, w = image.shape[:2]
 
-image, scale, offset_h, offset_w = preprocess_image(image, image_size=image_size)
+image, scale, offset_h, offset_w = preprocess_image(
+    image, image_size=image_size)
 
 inputs = np.expand_dims(image, axis=0)
 
@@ -157,7 +159,8 @@ for box, score, label in zip(detections, scores, labels):
     ret, baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
     cv2.rectangle(src_image, (xmin, ymin), (xmax, ymax), color, 1)
     cv2.rectangle(
-        src_image, (xmin, ymax - ret[1] - baseline), (xmin + ret[0], ymax), color, -1
+        src_image, (xmin, ymax - ret[1] -
+                    baseline), (xmin + ret[0], ymax), color, -1
     )
 
     cv2.putText(
