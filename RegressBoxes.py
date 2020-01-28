@@ -33,7 +33,7 @@ class RegressBoxes(keras.layers.Layer):
         elif not isinstance(mean, np.ndarray):
             raise ValueError(
                 "Expected mean to be a np.ndarray,"
-                f" list or tuple. Received: {type(mean)}"
+                " list or tuple. Received: {}".format(type(mean))
             )
 
         if isinstance(std, (list, tuple)):
@@ -41,15 +41,15 @@ class RegressBoxes(keras.layers.Layer):
         elif not isinstance(std, np.ndarray):
             raise ValueError(
                 "Expected std to be a np.ndarray,"
-                f" list or tuple. Received: {type(std)}"
+                " list or tuple. Received: {}".format(type(std))
             )
 
         if isinstance(anchor_shape, (list, tuple)):
             anchor_shape = np.array(anchor_shape)
-        elif  anchor_shape and not isinstance(anchor_shape, np.ndarray):
+        elif anchor_shape and not isinstance(anchor_shape, np.ndarray):
             raise ValueError(
                 "Expected anchor_shape to be a np.ndarray,"
-                f" list or tuple. Received: {type(std)}"
+                " list or tuple. Received: {}".format(type(std))
             )
 
         self.mean = mean

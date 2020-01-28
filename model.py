@@ -258,52 +258,52 @@ def build_wBiFPN(features, num_channels, layer_index, freeze_bn=False):
 
     # upsample
     P7_U = layers.UpSampling2D()(P7_in)
-    P6_td = wBiFPNAdd(name="w_bi_fpn_add" if layer_index == 0 else f"w_bi_fpn_add_{8 * layer_index}")(
-        [P7_U, P6_in]
-    )
+    p6_td_name = "w_bi_fpn_add" if layer_index == 0 else "w_bi_fpn_add_{}".format(
+        8 * layer_index)
+    P6_td = wBiFPNAdd(name=p6_td_name)([P7_U, P6_in])
     P6_td = DepthwiseConvBlock(
         kernel_size=3, strides=1, freeze_bn=freeze_bn, name="BiFPN_{}_U_P6".format(layer_index)
     )(P6_td)
     P6_U = layers.UpSampling2D()(P6_td)
     P5_td = wBiFPNAdd(
-        name=f"w_bi_fpn_add_{8 * layer_index + 1}")([P6_U, P5_in])
+        name="w_bi_fpn_add_{}".format(8 * layer_index + 1))([P6_U, P5_in])
     P5_td = DepthwiseConvBlock(
         kernel_size=3, strides=1, freeze_bn=freeze_bn, name="BiFPN_{}_U_P5".format(layer_index)
     )(P5_td)
     P5_U = layers.UpSampling2D()(P5_td)
     P4_td = wBiFPNAdd(
-        name=f"w_bi_fpn_add_{8 * layer_index + 2}")([P5_U, P4_in])
+        name="w_bi_fpn_add_{}".format(8 * layer_index + 2))([P5_U, P4_in])
     P4_td = DepthwiseConvBlock(
         kernel_size=3, strides=1, freeze_bn=freeze_bn, name="BiFPN_{}_U_P4".format(layer_index)
     )(P4_td)
     P4_U = layers.UpSampling2D()(P4_td)
     P3_out = wBiFPNAdd(
-        name=f"w_bi_fpn_add_{8 * layer_index + 3}")([P4_U, P3_in])
+        name="w_bi_fpn_add_{}".format(8 * layer_index + 3))([P4_U, P3_in])
     P3_out = DepthwiseConvBlock(
         kernel_size=3, strides=1, freeze_bn=freeze_bn, name="BiFPN_{}_U_P3".format(layer_index)
     )(P3_out)
     # downsample
     P3_D = layers.MaxPooling2D(strides=(2, 2))(P3_out)
     P4_out = wBiFPNAdd(
-        name=f"w_bi_fpn_add_{8 * layer_index + 4}")([P3_D, P4_td, P4_in])
+        name="w_bi_fpn_add_{}".format(8 * layer_index + 4))([P3_D, P4_td, P4_in])
     P4_out = DepthwiseConvBlock(
         kernel_size=3, strides=1, freeze_bn=freeze_bn, name="BiFPN_{}_D_P4".format(layer_index)
     )(P4_out)
     P4_D = layers.MaxPooling2D(strides=(2, 2))(P4_out)
     P5_out = wBiFPNAdd(
-        name=f"w_bi_fpn_add_{8 * layer_index + 5}")([P4_D, P5_td, P5_in])
+        name="w_bi_fpn_add_{}".format(8 * layer_index + 5))([P4_D, P5_td, P5_in])
     P5_out = DepthwiseConvBlock(
         kernel_size=3, strides=1, freeze_bn=freeze_bn, name="BiFPN_{}_D_P5".format(layer_index)
     )(P5_out)
     P5_D = layers.MaxPooling2D(strides=(2, 2))(P5_out)
     P6_out = wBiFPNAdd(
-        name=f"w_bi_fpn_add_{8 * layer_index + 6}")([P5_D, P6_td, P6_in])
+        name="w_bi_fpn_add_{}".format(8 * layer_index + 6))([P5_D, P6_td, P6_in])
     P6_out = DepthwiseConvBlock(
         kernel_size=3, strides=1, freeze_bn=freeze_bn, name="BiFPN_{}_D_P6".format(layer_index)
     )(P6_out)
     P6_D = layers.MaxPooling2D(strides=(2, 2))(P6_out)
     P7_out = wBiFPNAdd(
-        name=f"w_bi_fpn_add_{8 * layer_index + 7}")([P6_D, P7_in])
+        name="w_bi_fpn_add_{}".format(8 * layer_index + 7))([P6_D, P7_in])
     P7_out = DepthwiseConvBlock(
         kernel_size=3, strides=1, freeze_bn=freeze_bn, name="BiFPN_{}_D_P7".format(layer_index)
     )(P7_out)
