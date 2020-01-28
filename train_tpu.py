@@ -64,10 +64,10 @@ def parse_args():
     return parsed_args
 
 
-def load_weights(model, snapshot, phi):
-    if snapshot:
+def load_weights(model, weights, phi):
+    if weights:
         print('Loading weights, this may take a second...')
-        model.load_weights(snapshot, by_name=True)
+        model.load_weights(weights, by_name=True)
         print("done loading model")
     else:
         model_name = 'efficientnet-b{}'.format(phi)
@@ -187,7 +187,7 @@ def main(args=None):
                             weighted_bifpn=args.weighted_bifpn,
                             freeze_bn=args.freeze_backbone)
 
-    load_weights(model, args.snapshot, args.phi)
+    load_weights(model, args.weights, args.phi)
 
     # freeze backbone layers
     if args.freeze_backbone:
