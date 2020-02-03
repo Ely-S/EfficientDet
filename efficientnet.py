@@ -138,7 +138,8 @@ DENSE_KERNEL_INITIALIZER = {
 
 
 def preprocess_input(x, **kwargs):
-    kwargs = {k: v for k, v in kwargs.items() if k in ['backend', 'layers', 'models', 'utils']}
+    kwargs = {k: v for k, v in kwargs.items() if k in [
+        'backend', 'layers', 'models', 'utils']}
     return _preprocess_input(x, mode='torch', **kwargs)
 
 
@@ -190,7 +191,8 @@ def round_filters(filters, width_coefficient, depth_divisor):
     """Round number of filters based on width multiplier."""
 
     filters *= width_coefficient
-    new_filters = int(filters + depth_divisor / 2) // depth_divisor * depth_divisor
+    new_filters = int(filters + depth_divisor /
+                      2) // depth_divisor * depth_divisor
     new_filters = max(depth_divisor, new_filters)
     # Make sure that round down does not go down by more than 10%.
     if new_filters < 0.9 * filters:
@@ -207,7 +209,8 @@ def round_repeats(repeats, depth_coefficient):
 def mb_conv_block(inputs, block_args, activation, drop_rate=None, prefix='', freeze_bn=False):
     """Mobile Inverted Residual Bottleneck."""
 
-    has_se = (block_args.se_ratio is not None) and (0 < block_args.se_ratio <= 1)
+    has_se = (block_args.se_ratio is not None) and (
+        0 < block_args.se_ratio <= 1)
     bn_axis = 3 if backend.image_data_format() == 'channels_last' else 1
 
     # workaround over non working dropout with None in noise_shape in tf.keras
@@ -226,7 +229,8 @@ def mb_conv_block(inputs, block_args, activation, drop_rate=None, prefix='', fre
                           use_bias=False,
                           kernel_initializer=CONV_KERNEL_INITIALIZER,
                           name=prefix + 'expand_conv')(inputs)
-        x = BatchNormalization(freeze=freeze_bn, axis=bn_axis, name=prefix + 'expand_bn')(x)
+        x = BatchNormalization(
+            freeze=freeze_bn, axis=bn_axis, name=prefix + 'expand_bn')(x)
         x = layers.Activation(activation, name=prefix + 'expand_activation')(x)
     else:
         x = inputs
@@ -238,7 +242,8 @@ def mb_conv_block(inputs, block_args, activation, drop_rate=None, prefix='', fre
                                use_bias=False,
                                depthwise_initializer=CONV_KERNEL_INITIALIZER,
                                name=prefix + 'dwconv')(x)
-    x = BatchNormalization(freeze=freeze_bn, axis=bn_axis, name=prefix + 'bn')(x)
+    x = BatchNormalization(
+        freeze=freeze_bn, axis=bn_axis, name=prefix + 'bn')(x)
     x = layers.Activation(activation, name=prefix + 'activation')(x)
 
     # Squeeze and Excitation phase
@@ -246,10 +251,13 @@ def mb_conv_block(inputs, block_args, activation, drop_rate=None, prefix='', fre
         num_reduced_filters = max(1, int(
             block_args.input_filters * block_args.se_ratio
         ))
-        se_tensor = layers.GlobalAveragePooling2D(name=prefix + 'se_squeeze')(x)
+        se_tensor = layers.GlobalAveragePooling2D(
+            name=prefix + 'se_squeeze')(x)
 
-        target_shape = (1, 1, filters) if backend.image_data_format() == 'channels_last' else (filters, 1, 1)
-        se_tensor = layers.Reshape(target_shape, name=prefix + 'se_reshape')(se_tensor)
+        target_shape = (1, 1, filters) if backend.image_data_format(
+        ) == 'channels_last' else (filters, 1, 1)
+        se_tensor = layers.Reshape(
+            target_shape, name=prefix + 'se_reshape')(se_tensor)
         se_tensor = layers.Conv2D(num_reduced_filters, 1,
                                   activation=activation,
                                   padding='same',
@@ -278,7 +286,8 @@ def mb_conv_block(inputs, block_args, activation, drop_rate=None, prefix='', fre
                       use_bias=False,
                       kernel_initializer=CONV_KERNEL_INITIALIZER,
                       name=prefix + 'project_conv')(x)
-    x = BatchNormalization(freeze=freeze_bn, axis=bn_axis, name=prefix + 'project_bn')(x)
+    x = BatchNormalization(freeze=freeze_bn, axis=bn_axis,
+                           name=prefix + 'project_bn')(x)
     if block_args.id_skip and all(
             s == 1 for s in block_args.strides
     ) and block_args.input_filters == block_args.output_filters:
@@ -385,7 +394,7 @@ def EfficientNet(width_coefficient,
             img_input = input_tensor
 
     bn_axis = 3 if backend.image_data_format() == 'channels_last' else 1
-    
+
     # The original uses
     #    activation = get_swish(**kwargs)
     # but this version needs to use a string because the
@@ -432,7 +441,8 @@ def EfficientNet(width_coefficient,
                 input_filters=block_args.output_filters, strides=[1, 1])
             # pylint: enable=protected-access
             for bidx in xrange(block_args.num_repeat - 1):
-                drop_rate = drop_connect_rate * float(block_num) / num_blocks_total
+                drop_rate = drop_connect_rate * \
+                    float(block_num) / num_blocks_total
                 block_prefix = 'block{}{}_'.format(
                     idx + 1,
                     string.ascii_lowercase[bidx + 1]

@@ -17,14 +17,15 @@ from losses import smooth_l1, focal
 from efficientnet import BASE_WEIGHTS_PATH, WEIGHTS_HASHES
 
 import utils
+import utils.anchors_tpu
+import utils.tpu as tpu
+
+tf.debugging.set_log_device_placement(True)
 
 EFFICIENTNET_DEPTHS = [227, 329, 329, 374, 464, 566, 656]
 
-
-def get_session():
-    config = tf.ConfigProto()
-    config.gpu_options.allow_growth = True
-    return tf.Session(config=config)
+# tf.enable_v2_behavior()
+# tf.compat.v1.enable_eager_execution()
 
 
 def parse_args():
@@ -56,11 +57,17 @@ def parse_args():
     parser.add_argument(
         '--freeze-batchnorm', help='Freeze training of BatchNormalization layers.', action='store_true')
 
+    parser.add_argument("--weighted", dest="weighted_bifpn",
+                        action="store_true")
+
     parser.add_argument(
-        '--workers', help='Number of multiprocessing workers', type=int, default=1)
+        '--workers', help='Number of multiprocessing workers. Defaults to autotune.', type=int,
+        default=tf.data.experimental.AUTOTUNE)
+
+    parser.add_argument(
+        '--debug', help='Make assertions about inputs, check for nans', action='store_true')
 
     parsed_args = parser.parse_args()
-    print(parsed_args)
     return parsed_args
 
 
@@ -81,119 +88,8 @@ def load_weights(model, weights, phi):
         model.load_weights(weights_path, by_name=True)
 
 
-def train_model(model, epochs, input_train_data, input_eval_data):
-    model_dir = "/tmp/"
-
-    estimator = tf.keras.estimator.model_to_estimator(
-        model,
-        model_dir=model_dir,
-    )
-
-    for i in range(0, epochs):
-        print("Epoch", i)
-
-        estimator.train(input_train_data)
-
-        print("eval")
-        estimator.evaluate(
-            input_eval_data,
-            hooks=None,
-            checkpoint_path=None,
-            name="val"
-        )
-
-
-def main(args=None):
-    tf.keras.backend.set_session(get_session())
-
-    # tfds works in both Eager and Graph modes
-    # tf.compat.v1.enable_eager_execution()
-
-    # .prefetch(tf.data.experimental.AUTOTUNE)
-
-    workers = args.workers
-    batch_size = args.batch_size
-    datasetName = args.dataset
-    image_size = (image_sizes[args.phi], image_sizes[args.phi])
-
-    anchors = utils.anchors.anchors_for_shape(image_size)
-
-    info = tfds.builder(datasetName).info
-    num_classes = info.features['labels'].num_classes
-
-    def preprocess_one(x):
-        image = x['image'].numpy()
-        objects = x['objects']
-
-        # input bboxes are an array of (n, 4)
-        # where the format is ymin,xmin,ymax,xmax
-        # with relative coords between 0 and 1.
-        bboxes = objects['bbox'].numpy()
-
-        height, width, channels = image.shape
-
-        # The model expects absolute bbox coords
-        # in the order [x1, y1, x2, y2] not [y1, x1, y2, x2]
-        bboxes = bboxes[:, [1, 0, 3, 2]]
-
-        # Change from relative to absolute coords
-        bboxes[:, [0, 2]] *= width
-        bboxes[:, [1, 3]] *= height
-
-        scaled_image, scale, offset_h, offset_w = utils.preprocess_image(
-            image, image_size)
-
-        # apply resizing to annotations too
-        bboxes *= scale
-        bboxes[:, [0, 2]] += offset_w
-        bboxes[:, [1, 3]] += offset_h
-
-        annotations = {
-            "label": objects["label"],
-            "bboxes": bboxes
-        }
-
-        return scaled_image, annotations
-
-    def preprocess_batch(image_batch, annotations_batch):
-        targets = anchors.anchor_targets_bbox(
-            anchors,
-            image_batch,
-            annotations_batch,
-            num_classes
-        )
-
-        return image_batch, targets
-
-    def input_train_data():
-        split = tfds.Split.TRAIN
-        dataset = tfds.load(datasetName, split=split, as_supervised=True)
-        batch = dataset.map(preprocess_one, num_parallel_calls=workers
-                            ).batch(batch_size
-                                    ).map(preprocess_batch, num_parallel_calls=workers)
-        return batch
-
-    def input_eval_data():
-        split = tfds.Split.VALIDATION
-        dataset = tfds.load(datasetName, split=split, as_supervised=True)
-        batch = dataset.map(preprocess_one, num_parallel_calls=workers
-                            ).batch(batch_size
-                                    ).map(preprocess_batch, num_parallel_calls=workers)
-        return batch
-
-    model, _ = efficientdet(args.phi,
-                            num_classes=num_classes,
-                            anchors=anchors,
-                            weighted_bifpn=args.weighted_bifpn,
-                            freeze_bn=args.freeze_backbone)
-
-    load_weights(model, args.weights, args.phi)
-
-    # freeze backbone layers
-    if args.freeze_backbone:
-        for i in range(1, EFFICIENTNET_DEPTHS[args.phi]):
-            model.layers[i].trainable = False
-
+def train_model(model, epochs,  steps_per_epoch,
+                validation_steps, train_data, val_data):
     # The Optimizer
     # See https://github.com/shaoanlu/dogs-vs-cats-redux/blob/master/opt_experiment.ipynb
     # for benchmark of optimizers.
@@ -209,13 +105,146 @@ def main(args=None):
     # note: tfa is not supported by tf 1.15.0
     # focal_loss = tfa.losses.SigmoidFocalCrossEntropy(alpha=.25, gamma=1.5)
 
-    # compile model
     model.compile(optimizer=optimizer, loss={
         'regression': smooth_l1(),
         'classification': focal_loss
     })
 
-    train_model(model, args.epochs, input_train_data, input_eval_data)
+    history = model.fit(train_data,
+                        verbose=2,
+                        steps_per_epoch=steps_per_epoch,
+                        validation_data=val_data,
+                        validation_steps=validation_steps,
+                        epochs=epochs)
+
+
+def check_values(image, labels):
+    regression_target, labels_target = labels
+
+    tf.compat.v1.debugging.assert_all_finite(
+        image, "Image contains NaN or Infinity")
+
+    tf.compat.v1.debugging.assert_all_finite(
+        regression_target, "Regression target contains NaN or Infinity")
+
+    tf.compat.v1.debugging.assert_all_finite(
+        labels_target, "Labels contains Nan or Infinity")
+
+    tf.compat.v1.assert_greater_equal(
+        labels_target[:, :-1], 0.0,
+        summarize=100,
+        message="class labels are not everywhere >=0")
+
+    return image, labels
+
+
+def main(args=None):
+    workers = args.workers
+    batch_size = args.batch_size
+    datasetName = args.dataset
+
+    image_size = image_sizes[args.phi]
+    image_shape = (image_size, image_size)
+
+    anchors = utils.anchors.anchors_for_shape(image_shape)
+
+    info = tfds.builder(datasetName).info
+    num_classes = info.features['labels'].num_classes
+
+    labels_target_shape = tf.TensorShape(
+        (batch_size,  anchors.shape[0], num_classes + 1))
+    regression_target_shape = tf.TensorShape(
+        (batch_size, anchors.shape[0], 4 + 1))
+    scaled_image_shape = tf.TensorShape(
+        (batch_size, image_size, image_size, 3))
+
+    def deserialize(features, *args):
+
+        image_feature_description = {
+            'image': tf.io.FixedLenFeature(scaled_image_shape, tf.float32),
+            'regression': tf.io.FixedLenFeature(regression_target_shape, tf.float32),
+            'label': tf.io.FixedLenFeature(labels_target_shape, tf.float32),
+        }
+
+        example = tf.io.parse_single_example(features,
+                                             image_feature_description)
+
+        print(example)
+        image = example['image']
+        regression = example['regression']
+        label = example['label']
+
+        return image, (regression, label)
+
+    def input_data(global_batch_size, folder):
+        files = tf.data.Dataset.list_files(os.path.join(folder, "*.tfrecord"))
+
+        dataset = tf.data.TFRecordDataset(
+            files,
+            compression_type='ZLIB',
+            num_parallel_reads=workers)
+
+        # Keras expects a generator that lasts forever
+        dataset = dataset.repeat()
+
+        dataset = dataset.map(deserialize)
+
+        # Remove the earlier batching
+        dataset = dataset.unbatch()
+
+        if args.debug:
+            dataset = dataset.map(check_values)
+
+        dataset = dataset.shuffle(1000)
+
+        # drop_remainder is important on TPU, batch size must be fixed
+        dataset = dataset.batch(global_batch_size, drop_remainder=True)
+
+        # Load next batch before it is needed
+        prefetched = dataset.prefetch(tf.data.experimental.AUTOTUNE)
+
+        return prefetched
+
+    # number is samples in voc training
+    steps_per_epoch = math.ceil(2501 / batch_size)
+    # number is samples in voc validation
+    steps_per_val_epoch = math.ceil(2501 / batch_size)
+
+    # distribution_strategy = tpu.get_strategy()
+
+    distribution_strategy = tf.distribute.OneDeviceStrategy("/cpu:0")
+
+    with distribution_strategy.scope():
+
+        global_batch_size = (batch_size *
+                             distribution_strategy.num_replicas_in_sync)
+
+        model = efficientdet(args.phi,
+                             num_classes=num_classes,
+                             just_training_model=True,
+                             anchors=anchors,
+                             weighted_bifpn=args.weighted_bifpn,
+                             freeze_bn=args.freeze_backbone)
+
+        print(100000000000 * 1)
+
+        train_data = input_data(
+            global_batch_size, "gs://ondaka-ml-data/dev/e1/train")
+        val_data = input_data(
+            global_batch_size, "gs://ondaka-ml-data/dev/e1/validation")
+
+        load_weights(model, args.weights, args.phi)
+
+        print(100000000000 * 2)
+
+        # freeze backbone layers
+        if args.freeze_backbone:
+            for i in range(1, EFFICIENTNET_DEPTHS[args.phi]):
+                model.layers[i].trainable = False
+
+        print(100000000000 * 3)
+        train_model(model, args.epochs, steps_per_epoch,
+                    steps_per_val_epoch, train_data, val_data)
 
 
 if __name__ == '__main__':
@@ -224,5 +253,13 @@ if __name__ == '__main__':
         "PriorProbability": initializers.PriorProbability
     }
 
+    args = parse_args()
+
+    if args.debug:
+        tf.debugging.set_log_device_placement(True)
+        physical_devices = tf.config.experimental_list_devices()
+        print("Processors", physical_devices)
+        print("args", args)
+
     with tf.keras.utils.custom_object_scope(scope):
-        main(parse_args())
+        main(args)
