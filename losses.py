@@ -19,7 +19,7 @@ from tensorflow import keras
 import tensorflow as tf
 
 
-def focal(alpha=0.25, gamma=2.0):
+def tpu_focal(alpha=0.25, gamma=2.0):
     """
     Create a functor for computing the focal loss.
 
