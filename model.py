@@ -10,7 +10,6 @@ import numpy as np
 import tensorflow as tf
 import tensorflow.keras as tfk
 from tensorflow.keras import layers
-from tensorflow.keras import initializers
 from tensorflow.keras import models
 from tfkeras import EfficientNetB0, EfficientNetB1, EfficientNetB2
 from tfkeras import EfficientNetB3, EfficientNetB4, EfficientNetB5, EfficientNetB6
@@ -23,7 +22,6 @@ from layers import (
     BatchNormalization,
 )
 from initializers import PriorProbability
-
 from tensorflow.python.keras.utils import tf_utils
 import tensorflow.keras as keras
 
@@ -230,7 +228,9 @@ def build_wBiFPN(features, num_channels, id, freeze_bn=False):
     P4_out = wBiFPNAdd(name='w_bi_fpn_add_{}'.format(
         8 * id + 4))([P3_D, P4_td, P4_in])
     P4_out = DepthwiseConvBlock(
-        kernel_size=3, strides=1, freeze_bn=freeze_bn, name='BiFPN_{}_D_P4'.format(id))(P4_out)
+        name='BiFPN_{}_D_P4'.format(id),
+        kernel_size=3, strides=1, freeze_bn=freeze_bn,
+    )(P4_out)
     P4_D = layers.MaxPooling2D(strides=(2, 2))(P4_out)
     P5_out = wBiFPNAdd(name='w_bi_fpn_add_{}'.format(
         8 * id + 5))([P4_D, P5_td, P5_in])
@@ -260,62 +260,37 @@ def build_regress_head(width, depth, num_anchors=9):
         "kernel_size": 3,
         "strides": 1,
         "padding": "same",
-        "kernel_initializer": initializers.RandomNormal(
+        "kernel_initializer": tf.random_normal_initializer(
             mean=0.0, stddev=0.01, seed=None
         ),
         "bias_initializer": "zeros",
     }
 
-    model = keras.Sequential(name="box_head")
-
     inputs = layers.Input(shape=(None, None, width))
-    model.add(inputs)
+    outputs = inputs
 
+    # @TODO: Switch all convs to depthwise sperable convs with swish activation
+    # When applicable. The last layer of regression and classification heads needs
+    # To have a relu activation because the minimum must be 0.
     for i in range(depth):
-        # @TODO: Switch all convs to depthwise sperable convs
-        # when applicable
-        conv = layers.Conv2D(
+        outputs = layers.Conv2D(
             filters=width,
             activation="relu",
             name="regress_head_conv_{}".format(i),
-            **options)
-
-        model.add(conv)
+            **options
+        )(outputs)
 
     # Note: there is no activation function at the end. The offsets are linear.
-    final_conv = layers.Conv2D(
-        filters=num_anchors * 4,
+    outputs = layers.Conv2D(
+        num_anchors * 4,
         name="regress_head_conv_final",
-        **options)
+        **options
+    )(outputs)
 
-    model.add(final_conv)
+    # (b, num_anchors_this_feature_map, 4)
+    outputs = layers.Reshape((-1, 4))(outputs)
 
-    # output (batch_size, num_anchors_this_feature_map, 4)
-    model.add(layers.Reshape((-1, 4)))
-
-    return model
-
-    # inputs = layers.Input(shape=(None, None, width))
-    # outputs = inputs
-
-    # # @TODO: Switch all convs to depthwise sperable convs with swish activation
-    # # When applicable. The last layer of regression and classification heads needs
-    # # To have a relu activation because the minimum must be 0.
-    # for i in range(depth):
-    #     outputs = layers.Conv2D(
-    #         filters=width,
-    #         activation="relu",
-    #         name="regress_head_conv_{}".format(i),
-    #         ** options)(outputs)
-
-    # # Note: there is no activation function at the end. The offsets are linear.
-    # outputs = layers.Conv2D(num_anchors * 4,
-    #                         name="regress_head_conv_final",
-    #                         ** options)(outputs)
-    # # (b, num_anchors_this_feature_map, 4)
-    # outputs = layers.Reshape((-1, 4))(outputs)
-
-    # return models.Model(inputs=inputs, outputs=outputs, name="box_head")
+    return models.Model(inputs=inputs, outputs=outputs, name="box_head")
 
 
 def build_class_head(width, depth, num_classes=20, num_anchors=9):
@@ -334,7 +309,7 @@ def build_class_head(width, depth, num_classes=20, num_anchors=9):
             activation="relu",
 
             # See: https://arxiv.org/pdf/1708.02002.pdf page 5 under initialization
-            kernel_initializer=initializers.RandomNormal(
+            kernel_initializer=tf.random_normal_initializer(
                 mean=0.0, stddev=0.01, seed=None
             ),
 
@@ -346,7 +321,7 @@ def build_class_head(width, depth, num_classes=20, num_anchors=9):
     # outputs = layers.Conv2D(num_anchors * num_classes, **options)(outputs)
     outputs = layers.Conv2D(
         filters=num_classes * num_anchors,
-        kernel_initializer=initializers.RandomNormal(
+        kernel_initializer=tf.random_normal_initializer(
             mean=0.0, stddev=0.01, seed=None),
         bias_initializer=PriorProbability(probability=0.01),
         name="pyramid_classification",
@@ -358,49 +333,6 @@ def build_class_head(width, depth, num_classes=20, num_anchors=9):
     outputs = layers.Activation('sigmoid')(outputs)
 
     return models.Model(inputs=inputs, outputs=outputs, name="class_head")
-
-
-# class BoxHead(tf.layers.Layer):
-#     def __init__(self, *args, **kwargs):
-#         super().__init__(*args, **kwargs)
-
-#     def __call__(self, input):
-#         def build_regress_head(width, depth, num_anchors=9):
-
-#     def build(self, input_shape):
-#         options = {
-#             "kernel_size": 3,
-#             "strides": 1,
-#             "padding": "same",
-#             "kernel_initializer": initializers.RandomNormal(
-#                 mean=0.0, stddev=0.01, seed=None
-#             ),
-#             "bias_initializer": "zeros",
-#         }
-
-#     self.layers = []
-
-#     for i in range(depth):
-#         # @TODO: Switch all convs to depthwise sperable convs
-#         # when applicable
-#         conv = layers.Conv2D(
-#             filters=width,
-#             activation="relu",
-#             name="regress_head_conv_{}".format(i),
-#             **options)
-
-#         self.layers.append(conv)
-
-#     # Note: there is no activation function at the end. The offsets are linear.
-#     final_conv = layers.Conv2D(
-#         filters=num_anchors * 4,
-#         name="regress_head_conv_final",
-#         **options)
-
-#     self.layers.append(final_conv)
-
-#     # output (batch_size, num_anchors_this_feature_map, 4)
-#     self.layers.append(layers.Reshape((-1, 4)))
 
 
 def efficientdet(
@@ -451,6 +383,7 @@ def efficientdet(
 
     model = models.Model(
         inputs=model_inputs,
+        # @TODO: LOOK AT ORDERING
         outputs=[regression, classification],
         name="efficientdet"
     )

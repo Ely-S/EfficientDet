@@ -5,7 +5,6 @@ import sys
 import math
 
 import tensorflow as tf
-from tensorflow import keras
 import tensorflow_datasets as tfds
 import cv2
 
@@ -13,14 +12,12 @@ import utils.anchors
 from augmentor.color import VisualEffect
 from augmentor.misc import MiscEffect
 from model import efficientdet, image_sizes
-from losses import smooth_l1, focal
 from efficientnet import BASE_WEIGHTS_PATH, WEIGHTS_HASHES
 
 import utils
 import utils.anchors_tpu
 import utils.tpu as tpu
 
-tf.debugging.set_log_device_placement(True)
 
 EFFICIENTNET_DEPTHS = [227, 329, 329, 374, 464, 566, 656]
 
@@ -61,7 +58,8 @@ def parse_args():
                         action="store_true")
 
     parser.add_argument(
-        '--workers', help='Number of multiprocessing workers. Defaults to autotune.', type=int,
+        '--workers', help='Number of multiprocessing workers. Defaults to autotune.',
+        type=int,
         default=tf.data.experimental.AUTOTUNE)
 
     parser.add_argument(
@@ -81,10 +79,10 @@ def load_weights(model, weights, phi):
         file_name = '{}_weights_tf_dim_ordering_tf_kernels_autoaugment_notop.h5'.format(
             model_name)
         file_hash = WEIGHTS_HASHES[model_name][1]
-        weights_path = keras.utils.get_file(file_name,
-                                            BASE_WEIGHTS_PATH + file_name,
-                                            cache_subdir='models',
-                                            file_hash=file_hash)
+        weights_path = tf.keras.utils.get_file(file_name,
+                                               BASE_WEIGHTS_PATH + file_name,
+                                               cache_subdir='models',
+                                               file_hash=file_hash)
         model.load_weights(weights_path, by_name=True)
 
 
@@ -99,15 +97,13 @@ def train_model(model, epochs,  steps_per_epoch,
     # @TODO: Add Warmup
     optimizer = tf.keras.optimizers.SGD(lr=.08, decay=4e-5, momentum=0.9)
 
-    # alpha and gamma values come from the EfficientDet paper
-    focal_loss = focal(alpha=0.25, gamma=1.5)
-
     # note: tfa is not supported by tf 1.15.0
     # focal_loss = tfa.losses.SigmoidFocalCrossEntropy(alpha=.25, gamma=1.5)
 
     model.compile(optimizer=optimizer, loss={
-        'regression': smooth_l1(),
-        'classification': focal_loss
+        # alpha and gamma values come from the EfficientDet paper
+        'classification': tpu.tpu_focal(alpha=0.25, gamma=1.5),
+        'regression': tpu.tpu_smooth_l1(),
     })
 
     history = model.fit(train_data,
@@ -124,14 +120,22 @@ def check_values(image, labels):
     tf.compat.v1.debugging.assert_all_finite(
         image, "Image contains NaN or Infinity")
 
+    tf.debugging.assert_type(
+        image, tf.bfloat16,
+        message="Input image must be a bfloat16")
+
     tf.compat.v1.debugging.assert_all_finite(
         regression_target, "Regression target contains NaN or Infinity")
+
+    tf.debugging.assert_type(
+        regression_target, tf.bfloat16,
+        message="input regression boxes must be a float32")
 
     tf.compat.v1.debugging.assert_all_finite(
         labels_target, "Labels contains Nan or Infinity")
 
     tf.compat.v1.assert_greater_equal(
-        labels_target[:, :-1], 0.0,
+        labels_target[:, :-1], tf.cast(0, tf.bfloat16),
         summarize=100,
         message="class labels are not everywhere >=0")
 
@@ -146,56 +150,64 @@ def main(args=None):
     image_size = image_sizes[args.phi]
     image_shape = (image_size, image_size)
 
-    anchors = utils.anchors.anchors_for_shape(image_shape)
-
     info = tfds.builder(datasetName).info
     num_classes = info.features['labels'].num_classes
 
-    labels_target_shape = tf.TensorShape(
-        (batch_size,  anchors.shape[0], num_classes + 1))
-    regression_target_shape = tf.TensorShape(
-        (batch_size, anchors.shape[0], 4 + 1))
-    scaled_image_shape = tf.TensorShape(
-        (batch_size, image_size, image_size, 3))
+    anchors = utils.anchors.anchors_for_shape(image_shape)
+    labels_target_shape = tf.TensorShape((anchors.shape[0], num_classes + 1))
+    regression_target_shape = tf.TensorShape((anchors.shape[0], 4 + 1))
+    scaled_image_shape = tf.TensorShape((image_size, image_size, 3))
 
-    def deserialize(features, *args):
+    image_feature_description = {
+        # PNGs may be compresed to different lengths
+        'image': tf.io.FixedLenFeature([], tf.string),
+        'regression': tf.io.FixedLenFeature([], tf.string),
+        'label':  tf.io.FixedLenFeature([], tf.string),
+    }
 
-        image_feature_description = {
-            'image': tf.io.FixedLenFeature(scaled_image_shape, tf.float32),
-            'regression': tf.io.FixedLenFeature(regression_target_shape, tf.float32),
-            'label': tf.io.FixedLenFeature(labels_target_shape, tf.float32),
-        }
+    def parse_example_file(serialized_example, *args):
+        # example = tf.train.Example.ParseFromString(tfrecord)
 
-        example = tf.io.parse_single_example(features,
+        example = tf.io.parse_single_example(serialized_example,
                                              image_feature_description)
 
-        print(example)
-        image = example['image']
-        regression = example['regression']
-        label = example['label']
+        # PNGs are represented as uints, which is why they are unscaled
+        png = tf.io.decode_png(example["image"])
 
-        return image, (regression, label)
+        regression_target = tf.io.parse_tensor(
+            example["regression"], out_type=tf.float32)
+        label_target = tf.io.parse_tensor(
+            example["label"], out_type=tf.float32)
+
+        image = tf.cast(png, tf.bfloat16) / 255
+
+        label_target.set_shape(labels_target_shape)
+        regression_target.set_shape(regression_target_shape)
+        image.set_shape(scaled_image_shape)
+
+        label_target_16 = tf.cast(label_target, tf.bfloat16)
+        regression_target_16 = tf.cast(regression_target, tf.bfloat16)
+
+        return image, (regression_target_16, label_target_16)
 
     def input_data(global_batch_size, folder):
         files = tf.data.Dataset.list_files(os.path.join(folder, "*.tfrecord"))
 
         dataset = tf.data.TFRecordDataset(
             files,
-            compression_type='ZLIB',
             num_parallel_reads=workers)
+
+        # Shuffle before repeat so that every element is show
+        # in every batch
+        dataset = dataset.shuffle(1000)
 
         # Keras expects a generator that lasts forever
         dataset = dataset.repeat()
 
-        dataset = dataset.map(deserialize)
-
-        # Remove the earlier batching
-        dataset = dataset.unbatch()
+        dataset = dataset.map(parse_example_file, workers)
 
         if args.debug:
             dataset = dataset.map(check_values)
-
-        dataset = dataset.shuffle(1000)
 
         # drop_remainder is important on TPU, batch size must be fixed
         dataset = dataset.batch(global_batch_size, drop_remainder=True)
@@ -210,56 +222,56 @@ def main(args=None):
     # number is samples in voc validation
     steps_per_val_epoch = math.ceil(2501 / batch_size)
 
-    # distribution_strategy = tpu.get_strategy()
+    distribution_strategy = tpu.get_strategy()
 
-    distribution_strategy = tf.distribute.OneDeviceStrategy("/cpu:0")
+    # distribution_strategy = tf.distribute.OneDeviceStrategy("/cpu:0")
 
     with distribution_strategy.scope():
+        config = tf.compat.v1.ConfigProto()
+        config.gpu_options.allow_growth = True
+        session = tf.compat.v1.Session(config=config, graph=tf.Graph())
+        tf.compat.v1.keras.backend.set_session(session)
 
-        global_batch_size = (batch_size *
-                             distribution_strategy.num_replicas_in_sync)
+        with session:
+            global_batch_size = (batch_size *
+                                 distribution_strategy.num_replicas_in_sync)
 
-        model = efficientdet(args.phi,
-                             num_classes=num_classes,
-                             just_training_model=True,
-                             anchors=anchors,
-                             weighted_bifpn=args.weighted_bifpn,
-                             freeze_bn=args.freeze_backbone)
+            model = efficientdet(args.phi,
+                                 num_classes=num_classes,
+                                 just_training_model=True,
+                                 # anchors=anchors,
+                                 weighted_bifpn=args.weighted_bifpn,
+                                 freeze_bn=args.freeze_backbone)
 
-        print(100000000000 * 1)
+            train_data = input_data(
+                global_batch_size, "gs://ondaka-ml-data/dev/run1/train")
+            val_data = input_data(
+                global_batch_size, "gs://ondaka-ml-data/dev/run1/val")
 
-        train_data = input_data(
-            global_batch_size, "gs://ondaka-ml-data/dev/e1/train")
-        val_data = input_data(
-            global_batch_size, "gs://ondaka-ml-data/dev/e1/validation")
+            load_weights(model, args.weights, args.phi)
 
-        load_weights(model, args.weights, args.phi)
+            # freeze backbone layers
+            if args.freeze_backbone:
+                for i in range(1, EFFICIENTNET_DEPTHS[args.phi]):
+                    model.layers[i].trainable = False
 
-        print(100000000000 * 2)
-
-        # freeze backbone layers
-        if args.freeze_backbone:
-            for i in range(1, EFFICIENTNET_DEPTHS[args.phi]):
-                model.layers[i].trainable = False
-
-        print(100000000000 * 3)
-        train_model(model, args.epochs, steps_per_epoch,
-                    steps_per_val_epoch, train_data, val_data)
+            train_model(model, args.epochs, steps_per_epoch,
+                        steps_per_val_epoch, train_data, val_data)
 
 
 if __name__ == '__main__':
     import initializers
-    scope = {
-        "PriorProbability": initializers.PriorProbability
-    }
 
     args = parse_args()
 
     if args.debug:
         tf.debugging.set_log_device_placement(True)
-        physical_devices = tf.config.experimental_list_devices()
-        print("Processors", physical_devices)
         print("args", args)
 
-    with tf.keras.utils.custom_object_scope(scope):
+    object_scope = tf.keras.utils.custom_object_scope({
+        "PriorProbability": initializers.PriorProbability
+    })
+
+    with object_scope:
         main(args)
+        print("Done")

@@ -8,7 +8,7 @@ import tensorflow as tf
 
 def get_strategy():
     resolver = tf.distribute.cluster_resolver.TPUClusterResolver(
-        coordinator_name='host'
+        # coordinator_name='host'
     )
 
     tf.config.experimental_connect_to_cluster(resolver)
@@ -62,12 +62,14 @@ def tpu_smooth_l1(sigma=3.0):
             normalizer = tf.count_nonzero(positive_mask, dtype=tf.float32)
             normalizer = tf.maximum(1.0, normalizer)
 
-            ignore_mask = tf.cast(tf.not_equal(anchor_state, -1), tf.float32)
-            # used to filter out "ignore" anchors
-
             # @TODO: Benchmark these two approaches to calculating total_loss
             # total_loss_ein = tf.einsum("ijk,ij", regression_loss, ignore_mask)
+
+            # Class loss is 0 for ignore anchors
+            ignore_mask = tf.cast(
+                tf.not_equal(anchor_state, -1), regression_loss.dtype)
             per_anchor_loss = tf.math.reduce_sum(regression_loss, axis=2)
+
             per_anchor_loss_without_ignore = per_anchor_loss * ignore_mask
             total_loss = tf.math.reduce_sum(per_anchor_loss_without_ignore)
 
@@ -101,19 +103,18 @@ def tpu_focal(alpha=0.25, gamma=2.0):
             FL(p_t) =−αt(1−p_t)^γ * log(p_t)
         """
         with tf.name_scope("focal_loss"):
-            classification = y_pred
-
             # shape (B, N, num_classes). Excludes anchor_state
-            labels = y_true[:, :, :-1]
+            true_class = y_true[:, :, :-1]
+            pred_class = y_pred
 
             # anchor state is -1 for ignore, 0 for background, 1 for object
             anchor_state = y_true[:, :, -1]
             # anchor state shape is (B, N)
 
             # compute the focal loss
-            _alpha = alpha + tf.zeros_like(labels)
+            _alpha = alpha + tf.zeros_like(true_class)
 
-            is_foreground = tf.equal(labels, 1)
+            is_foreground = tf.equal(true_class, 1)
 
             alpha_factor = tf.where(is_foreground,
                                     x=_alpha,
@@ -122,27 +123,29 @@ def tpu_focal(alpha=0.25, gamma=2.0):
 
             # (1 - 0.99) ** 2 = 1e-4, (1 - 0.9) ** 2 = 1e-2
             focal_weight = tf.where(is_foreground,
-                                    x=1 - classification,
-                                    y=classification,
+                                    x=1 - pred_class,
+                                    y=pred_class,
                                     name="alphaweight")
 
             focal_weight = alpha_factor * focal_weight ** gamma
 
             # focal_weight = ignore_
             cls_loss = focal_weight * \
-                tf.keras.backend.binary_crossentropy(labels, classification)
-
-            per_anchor_loss = tf.math.reduce_sum(cls_loss, axis=2)
+                tf.keras.backend.binary_crossentropy(
+                    true_class, pred_class)
 
             # Class loss is 0 for ignore anchors
-            ignore_mask = tf.cast(tf.not_equal(anchor_state, -1), tf.float32)
+            ignore_mask = tf.cast(
+                tf.not_equal(anchor_state, -1), cls_loss.dtype)
+            per_anchor_loss = tf.math.reduce_sum(cls_loss, axis=2)
+
             per_anchor_loss_without_ignore = per_anchor_loss * ignore_mask
             total_loss = tf.math.reduce_sum(per_anchor_loss_without_ignore)
 
             # compute the normalizer: the number of positive anchors
             positive_mask = tf.cast(tf.equal(anchor_state, 1), tf.int32)
-            normalizer = tf.count_nonzero(positive_mask, dtype=tf.float32)
-            normalizer = tf.maximum(1.0, normalizer)
+            positive_count = tf.count_nonzero(positive_mask, dtype=tf.float32)
+            normalizer = tf.maximum(1.0, positive_count)
 
             return total_loss / normalizer
 
