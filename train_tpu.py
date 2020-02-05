@@ -3,6 +3,7 @@ from datetime import date
 import os
 import sys
 import math
+import logging
 
 import tensorflow as tf
 import tensorflow_datasets as tfds
@@ -18,11 +19,10 @@ import utils
 import utils.anchors_tpu
 import utils.tpu as tpu
 
+tf.debugging.set_log_device_placement(True)
+log = logging.getLogger(__file__)
 
 EFFICIENTNET_DEPTHS = [227, 329, 329, 374, 464, 566, 656]
-
-# tf.enable_v2_behavior()
-# tf.compat.v1.enable_eager_execution()
 
 
 def parse_args():
@@ -71,10 +71,11 @@ def parse_args():
 
 def load_weights(model, weights, phi):
     if weights:
-        print('Loading weights, this may take a second...')
+        log.debug('Loading weights, this may take a second...')
         model.load_weights(weights, by_name=True)
-        print("done loading model")
+        log.debug("done loading model")
     else:
+        log.debug("Downloading Weights")
         model_name = 'efficientnet-b{}'.format(phi)
         file_name = '{}_weights_tf_dim_ordering_tf_kernels_autoaugment_notop.h5'.format(
             model_name)
@@ -83,7 +84,9 @@ def load_weights(model, weights, phi):
                                                BASE_WEIGHTS_PATH + file_name,
                                                cache_subdir='models',
                                                file_hash=file_hash)
+        log.debug("Loading weights")
         model.load_weights(weights_path, by_name=True)
+        log.debug("Loaded weigths")
 
 
 def train_model(model, epochs,  steps_per_epoch,
@@ -97,14 +100,26 @@ def train_model(model, epochs,  steps_per_epoch,
     # @TODO: Add Warmup
     optimizer = tf.keras.optimizers.SGD(lr=.08, decay=4e-5, momentum=0.9)
 
+    # alpha and gamma values come from the EfficientDet paper
+    classification_loss = tpu.tpu_focal(alpha=0.25, gamma=1.5)
+    regression_loss = tpu.tpu_smooth_l1()
+
     # note: tfa is not supported by tf 1.15.0
     # focal_loss = tfa.losses.SigmoidFocalCrossEntropy(alpha=.25, gamma=1.5)
 
-    model.compile(optimizer=optimizer, loss={
-        # alpha and gamma values come from the EfficientDet paper
-        'classification': tpu.tpu_focal(alpha=0.25, gamma=1.5),
-        'regression': tpu.tpu_smooth_l1(),
-    })
+    log.debug("Compiling model")
+
+    # Work around for: https://github.com/tensorflow/tensorflow/issues/34199
+    model.compile(
+        optimizer=optimizer,
+        loss=[regression_loss, classification_loss])
+
+    # model.compile(optimizer=optimizer, loss={
+    #     'classification': ,
+    #     'regression': ,
+    # })
+
+    log.debug("Fitting model")
 
     history = model.fit(train_data,
                         verbose=2,
@@ -120,22 +135,22 @@ def check_values(image, labels):
     tf.compat.v1.debugging.assert_all_finite(
         image, "Image contains NaN or Infinity")
 
-    tf.debugging.assert_type(
-        image, tf.bfloat16,
-        message="Input image must be a bfloat16")
+    tf.compat.v1.debugging.assert_type(
+        image, tf.float32,
+        message="Input image must be a float32")
 
     tf.compat.v1.debugging.assert_all_finite(
         regression_target, "Regression target contains NaN or Infinity")
 
-    tf.debugging.assert_type(
-        regression_target, tf.bfloat16,
+    tf.compat.v1.debugging.assert_type(
+        regression_target, tf.float32,
         message="input regression boxes must be a float32")
 
     tf.compat.v1.debugging.assert_all_finite(
         labels_target, "Labels contains Nan or Infinity")
 
     tf.compat.v1.assert_greater_equal(
-        labels_target[:, :-1], tf.cast(0, tf.bfloat16),
+        labels_target[:, :-1], tf.cast(0, tf.float32),
         summarize=100,
         message="class labels are not everywhere >=0")
 
@@ -179,16 +194,13 @@ def main(args=None):
         label_target = tf.io.parse_tensor(
             example["label"], out_type=tf.float32)
 
-        image = tf.cast(png, tf.bfloat16) / 255
+        image = tf.cast(png, tf.float32) / 255
 
         label_target.set_shape(labels_target_shape)
         regression_target.set_shape(regression_target_shape)
         image.set_shape(scaled_image_shape)
 
-        label_target_16 = tf.cast(label_target, tf.bfloat16)
-        regression_target_16 = tf.cast(regression_target, tf.bfloat16)
-
-        return image, (regression_target_16, label_target_16)
+        return image, (regression_target, label_target)
 
     def input_data(global_batch_size, folder):
         files = tf.data.Dataset.list_files(os.path.join(folder, "*.tfrecord"))
@@ -197,7 +209,7 @@ def main(args=None):
             files,
             num_parallel_reads=workers)
 
-        # Shuffle before repeat so that every element is show
+        # Shuffle before repeat so that every record appears
         # in every batch
         dataset = dataset.shuffle(1000)
 
@@ -224,39 +236,68 @@ def main(args=None):
 
     distribution_strategy = tpu.get_strategy()
 
-    # distribution_strategy = tf.distribute.OneDeviceStrategy("/cpu:0")
+    tf.debugging.set_log_device_placement(True)
 
+    with start_session():
+
+        log.debug("Creating model")
+        local_model = efficientdet(
+            args.phi,
+            num_classes=num_classes,
+            just_training_model=True,
+            # anchors=anchors,
+            weighted_bifpn=args.weighted_bifpn,
+            freeze_bn=args.freeze_backbone)
+
+        log.debug("Created Model")
+
+        load_weights(local_model, args.weights, args.phi)
+
+        # freeze backbone layers
+        if args.freeze_backbone:
+            for i in range(1, EFFICIENTNET_DEPTHS[args.phi]):
+                local_model.layers[i].trainable = False
+
+        saved_model_path = "/tmp/tf_save"
+        log.debug("Saving temp model to %s", saved_model_path)
+        tf.saved_model.save(local_model, saved_model_path)
+        log.debug("saved model")
+
+    log.debug("Entering Distribution Strategy")
     with distribution_strategy.scope():
-        config = tf.compat.v1.ConfigProto()
-        config.gpu_options.allow_growth = True
-        session = tf.compat.v1.Session(config=config, graph=tf.Graph())
-        tf.compat.v1.keras.backend.set_session(session)
+        # Clear memory from the previous model
+        with start_session():
 
-        with session:
+            tf.debugging.set_log_device_placement(True)
+
+            log.debug("Loading model across cluster")
+            model = tf.keras.models.load_model(saved_model_path)
+            log.debug("loaded model")
+
+            if args.debug:
+                physical_devices = tf.config.experimental_list_devices()
+                log.debug("Processors %s", physical_devices)
+                tf.debugging.set_log_device_placement(True)
+
             global_batch_size = (batch_size *
                                  distribution_strategy.num_replicas_in_sync)
-
-            model = efficientdet(args.phi,
-                                 num_classes=num_classes,
-                                 just_training_model=True,
-                                 # anchors=anchors,
-                                 weighted_bifpn=args.weighted_bifpn,
-                                 freeze_bn=args.freeze_backbone)
 
             train_data = input_data(
                 global_batch_size, "gs://ondaka-ml-data/dev/run1/train")
             val_data = input_data(
                 global_batch_size, "gs://ondaka-ml-data/dev/run1/val")
 
-            load_weights(model, args.weights, args.phi)
-
-            # freeze backbone layers
-            if args.freeze_backbone:
-                for i in range(1, EFFICIENTNET_DEPTHS[args.phi]):
-                    model.layers[i].trainable = False
-
+            log.debug("Starting to train")
             train_model(model, args.epochs, steps_per_epoch,
                         steps_per_val_epoch, train_data, val_data)
+
+
+def start_session():
+    config = tf.compat.v1.ConfigProto()
+    # config.gpu_options.allow_growth = True
+    session = tf.compat.v1.Session(config=config, graph=tf.Graph())
+    tf.compat.v1.keras.backend.set_session(session)
+    return session
 
 
 if __name__ == '__main__':
@@ -265,8 +306,9 @@ if __name__ == '__main__':
     args = parse_args()
 
     if args.debug:
+        log.setLevel(logging.DEBUG)
         tf.debugging.set_log_device_placement(True)
-        print("args", args)
+        log.debug("args %s", args)
 
     object_scope = tf.keras.utils.custom_object_scope({
         "PriorProbability": initializers.PriorProbability
@@ -274,4 +316,4 @@ if __name__ == '__main__':
 
     with object_scope:
         main(args)
-        print("Done")
+        log.info("Done")

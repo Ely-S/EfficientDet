@@ -20,8 +20,8 @@ run the installs from the dockerfile
 
 Note that specifying the python and pip versions is important.
 
+    sudo pip3 install -r requirements_tpu.txt Cython
     python3 setup.py build_ext --inplace
-    sudo pip3 install -r requirements_tpu.txt
 
 
 ## Generating Data
