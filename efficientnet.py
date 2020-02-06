@@ -123,7 +123,6 @@ CONV_KERNEL_INITIALIZER = {
         # a truncated distribution.
         # We decided against a custom initializer for better serializability.
         'distribution': 'untruncated_normal'
-
         # Note by eli: This was upgraded from 'normal' to 'untruncated_normal'
         # To avoid deprectation warning.
     }

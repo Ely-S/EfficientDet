@@ -38,6 +38,13 @@ backbones = [
 ]
 
 
+# See https://arxiv.org/pdf/1911.09070v1.pdf page 6
+batchnorm_config = {
+    "momentum": 0.997,
+    "epsilon": 1e-4
+}
+
+
 def DepthwiseConvBlock(kernel_size, strides, name, freeze_bn=False):
     f1 = layers.DepthwiseConv2D(
         kernel_size=kernel_size,
@@ -49,8 +56,10 @@ def DepthwiseConvBlock(kernel_size, strides, name, freeze_bn=False):
 
     # The previously used hack to freeze batchnorm is no longer necessary
     # See: https://www.tensorflow.org/api_docs/python/tf/keras/layers/BatchNormalization?version=stable#output_shape_2
-    f2 = layers.BatchNormalization(name="{}_bn".format(name),
-                                   trainable=not freeze_bn)
+    f2 = layers.BatchNormalization(
+        name="{}_bn".format(name),
+        trainable=not freeze_bn,
+        **batchnorm_config)
 
     f3 = layers.ReLU(name="{}_relu".format(name))
     return reduce(
@@ -69,8 +78,11 @@ def ConvBlock(num_channels, name, kernel_size=1, strides=1, freeze_bn=False):
         name="{}_conv".format(name),
     )
 
-    f2 = layers.BatchNormalization(name="{}_bn".format(name),
-                                   trainable=not freeze_bn)
+    f2 = layers.BatchNormalization(
+        name="{}_bn".format(name),
+        trainable=not freeze_bn,
+        **batchnorm_config)
+
     f3 = layers.ReLU(name="{}_relu".format(name))
     return reduce(
         lambda f, g: lambda *args, **kwargs: g(

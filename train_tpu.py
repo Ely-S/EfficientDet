@@ -5,6 +5,7 @@ import os
 import sys
 import math
 import logging
+import pathlib
 
 import tensorflow as tf
 import tensorflow_datasets as tfds
@@ -40,8 +41,15 @@ def parse_args():
     parser.add_argument('--dataset', default="voc",
                         help='Train on this stock dataset. See: https://www.tensorflow.org/datasets/catalog/voc')
 
+    parser.add_argument('--log-dir', type=str,
+                        help='Destination for Tensorboard logs')
+
     parser.add_argument('--weights', default=None,
                         help='Initialize weights using file.')
+
+    parser.add_argument('--cache', default=False,
+                        action="store_true",
+                        help='Store TF records in memory')
 
     parser.add_argument(
         '--epochs', help='Number of epochs to train. An epoch is a pass over the whole dataset', type=int, default=50)
@@ -54,13 +62,22 @@ def parse_args():
     parser.add_argument(
         '--freeze-batchnorm', help='Freeze training of BatchNormalization layers.', action='store_true')
 
-    parser.add_argument("--weighted", dest="weighted_bifpn",
-                        action="store_true")
-
     parser.add_argument(
         '--workers', help='Number of multiprocessing workers. Defaults to autotune.',
         type=int,
         default=tf.data.experimental.AUTOTUNE)
+
+    parser.add_argument(
+        "--steps",
+        help="steps per epoch",
+        default=1000,
+        type=int
+    )
+
+    parser.add_argument(
+        '--checkpoints',
+        help='The folder to place checkpoints. This is created if it needed.',
+        default='checkpoints')
 
     parser.add_argument(
         '--debug', help='Make assertions about inputs, check for nans', action='store_true')
@@ -87,44 +104,6 @@ def load_weights(model, weights, phi):
         log.debug("Loading weights")
         model.load_weights(weights_path, by_name=True)
         log.debug("Loaded weigths")
-
-
-def train_model(model, epochs,  steps_per_epoch,
-                validation_steps, train_data, val_data):
-    # The Optimizer
-    # See https://github.com/shaoanlu/dogs-vs-cats-redux/blob/master/opt_experiment.ipynb
-    # for benchmark of optimizers.
-    # @TODO: Tune this
-    # @TODO: Add Exponential Decay
-    # @TODO: Add Early Stopping
-    # @TODO: Add Warmup
-    # @TODO: Add Tensorboard
-    optimizer = tf.keras.optimizers.SGD(lr=.08, decay=4e-5, momentum=0.9)
-
-    # alpha and gamma values come from the EfficientDet paper
-    classification_loss = tpu.tpu_focal(alpha=0.25, gamma=1.5)
-    regression_loss = tpu.tpu_smooth_l1()
-
-    log.debug("Compiling model")
-
-    # Work around for: https://github.com/tensorflow/tensorflow/issues/34199
-    # model.compile(
-    #     optimizer=optimizer,
-    #     loss=[regression_loss, classification_loss])
-
-    model.compile(optimizer=optimizer, loss={
-        'classification': classification_loss,
-        'regression': regression_loss,
-    })
-
-    log.debug("Fitting model")
-
-    history = model.fit(train_data,
-                        verbose=2,
-                        steps_per_epoch=steps_per_epoch,
-                        validation_data=val_data,
-                        validation_steps=validation_steps,
-                        epochs=epochs)
 
 
 def check_values(image, labels):
@@ -192,7 +171,7 @@ def main(args=None):
         label_target = tf.io.parse_tensor(
             example["label"], out_type=tf.float32)
 
-        image = tf.cast(png, tf.float32) / 255
+        image = tf.cast(png, tf.float32) / 255.0
 
         label_target.set_shape(labels_target_shape)
         regression_target.set_shape(regression_target_shape)
@@ -206,6 +185,9 @@ def main(args=None):
         dataset = tf.data.TFRecordDataset(
             files,
             num_parallel_reads=workers)
+
+        if args.cache:
+            dataset = dataset.cache()
 
         # Shuffle before repeat so that every record appears
         # in every batch
@@ -227,26 +209,77 @@ def main(args=None):
 
         return prefetched
 
-    # number is samples in voc training
-    steps_per_epoch = math.ceil(2501 / batch_size)
     # number is samples in voc validation
     steps_per_val_epoch = math.ceil(2501 / batch_size)
 
+    checkpoint_dir = pathlib.Path(args.checkpoints)
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = str(checkpoint_dir / 'weights.{epoch:02d}.h5')
+
+    def train_model(model, validation_steps, train_data, val_data):
+
+        # The Optimizer
+        # See https://github.com/shaoanlu/dogs-vs-cats-redux/blob/master/opt_experiment.ipynb
+        # for benchmark of optimizers.
+        # @TODO: Tune this
+        # @TODO: Add Exponential Decay
+        # @TODO: Add Early Stopping
+        # @TODO: Add Warmup
+        # @TODO: Add Tensorboard
+        optimizer = tf.keras.optimizers.SGD(
+            lr=.05, decay=4e-5, momentum=0.9)
+
+        # alpha and gamma values come from the EfficientDet paper
+        classification_loss = tpu.tpu_focal(alpha=0.25, gamma=1.5)
+        regression_loss = tpu.tpu_smooth_l1()
+
+        log.debug("Compiling model")
+
+        checkpointer = tf.keras.callbacks.ModelCheckpoint(
+            filepath=checkpoint_path,
+            verbose=1
+        )
+
+        callbacks = [
+            tf.keras.callbacks.TensorBoard(
+                log_dir=args.log_dir,
+                write_graph=True
+            ),
+            checkpointer
+        ]
+
+        model.compile(
+            optimizer=optimizer,
+            loss={
+                'classification': classification_loss,
+                'regression': regression_loss,
+            },
+        )
+
+        log.debug("Fitting model")
+
+        model.fit(
+            train_data,
+            callbacks=callbacks,
+            verbose=1,
+            steps_per_epoch=args.steps,
+            validation_data=val_data,
+            validation_steps=validation_steps,
+            epochs=args.epochs)
     distribution_strategy = tpu.get_strategy()
 
     model_bytes = io.BytesIO()
 
     # Start a session just to build the model and load the weights
-    # then throw it awayt
+    # then throw it away
     with start_session():
         log.debug("Creating model")
         local_model = efficientdet(
             args.phi,
             num_classes=num_classes,
             just_training_model=True,
-            # anchors=anchors,
             weighted_bifpn=args.weighted_bifpn,
-            freeze_bn=args.freeze_backbone)
+            freeze_bn=args.freeze_batchnorm)
 
         log.debug("Created Model")
 
@@ -285,8 +318,7 @@ def main(args=None):
             global_batch_size, "gs://ondaka-ml-data/dev/run1/val")
 
         log.debug("Starting to train")
-        train_model(model, args.epochs, steps_per_epoch,
-                    steps_per_val_epoch, train_data, val_data)
+        train_model(model, steps_per_val_epoch, train_data, val_data)
 
 
 def start_session():
