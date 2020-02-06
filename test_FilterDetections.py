@@ -19,7 +19,7 @@ labels = np.array([1, 2, 1], "int64")
 
 
 def test_filter_by_score_and_nms():
-    with tf.Session().as_default():
+    with tf.compat.v1.Session().as_default():
         detections = fd.filter_by_score_and_nms(
             scores, labels, .12, boxes, 3, .5
         )

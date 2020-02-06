@@ -150,7 +150,7 @@ class Evaluate(keras.callbacks.Callback):
                     'AR @[ IoU=0.50:0.95 | area= large | maxDets=100 ]']
         coco_eval_stats = evaluate(self.generator, self.active_model, self.threshold)
         if coco_eval_stats is not None and self.tensorboard is not None and self.tensorboard.writer is not None:
-            summary = tf.Summary()
+            summary = tf.compat.v1.Summary()
             for index, result in enumerate(coco_eval_stats):
                 summary_value = summary.value.add()
                 summary_value.simple_value = result

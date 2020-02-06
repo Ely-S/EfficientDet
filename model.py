@@ -19,7 +19,6 @@ from layers import (
     RegressBoxes,
     FilterDetections,
     wBiFPNAdd,
-    BatchNormalization,
 )
 from initializers import PriorProbability
 from tensorflow.python.keras.utils import tf_utils
@@ -47,7 +46,12 @@ def DepthwiseConvBlock(kernel_size, strides, name, freeze_bn=False):
         use_bias=False,
         name="{}_dconv".format(name),
     )
-    f2 = BatchNormalization(freeze=freeze_bn, name="{}_bn".format(name))
+
+    # The previously used hack to freeze batchnorm is no longer necessary
+    # See: https://www.tensorflow.org/api_docs/python/tf/keras/layers/BatchNormalization?version=stable#output_shape_2
+    f2 = layers.BatchNormalization(name="{}_bn".format(name),
+                                   trainable=not freeze_bn)
+
     f3 = layers.ReLU(name="{}_relu".format(name))
     return reduce(
         lambda f, g: lambda *args, **kwargs: g(
@@ -64,7 +68,9 @@ def ConvBlock(num_channels, name, kernel_size=1, strides=1, freeze_bn=False):
         use_bias=False,
         name="{}_conv".format(name),
     )
-    f2 = BatchNormalization(freeze=freeze_bn, name="{}_bn".format(name))
+
+    f2 = layers.BatchNormalization(name="{}_bn".format(name),
+                                   trainable=not freeze_bn)
     f3 = layers.ReLU(name="{}_relu".format(name))
     return reduce(
         lambda f, g: lambda *args, **kwargs: g(
@@ -260,7 +266,7 @@ def build_regress_head(width, depth, num_anchors=9):
         "kernel_size": 3,
         "strides": 1,
         "padding": "same",
-        "kernel_initializer": tf.random_normal_initializer(
+        "kernel_initializer": tf.compat.v1.random_normal_initializer(
             mean=0.0, stddev=0.01, seed=None
         ),
         "bias_initializer": "zeros",
@@ -309,7 +315,7 @@ def build_class_head(width, depth, num_classes=20, num_anchors=9):
             activation="relu",
 
             # See: https://arxiv.org/pdf/1708.02002.pdf page 5 under initialization
-            kernel_initializer=tf.random_normal_initializer(
+            kernel_initializer=tf.compat.v1.random_normal_initializer(
                 mean=0.0, stddev=0.01, seed=None
             ),
 
@@ -321,7 +327,7 @@ def build_class_head(width, depth, num_classes=20, num_anchors=9):
     # outputs = layers.Conv2D(num_anchors * num_classes, **options)(outputs)
     outputs = layers.Conv2D(
         filters=num_classes * num_anchors,
-        kernel_initializer=tf.random_normal_initializer(
+        kernel_initializer=tf.compat.v1.random_normal_initializer(
             mean=0.0, stddev=0.01, seed=None),
         bias_initializer=PriorProbability(probability=0.01),
         name="pyramid_classification",

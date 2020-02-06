@@ -39,7 +39,7 @@ def tpu_smooth_l1(sigma=3.0):
         Returns
             The smooth L1 loss of y_pred w.r.t. y_true.
         """
-        with tf.name_scope("smooth_l1_loss"):
+        with tf.compat.v1.name_scope("smooth_l1_loss"):
             # separate target and state
             regression = y_pred
             regression_target = y_true[:, :, :-1]
@@ -51,7 +51,7 @@ def tpu_smooth_l1(sigma=3.0):
 
             regression_diff = tf.abs(regression - regression_target)
 
-            regression_loss = tf.where(
+            regression_loss = tf.compat.v1.where(
                 tf.less(regression_diff, 1.0 / sigma_squared),
                 x=0.5 * sigma_squared * (regression_diff ** 2),
                 y=regression_diff - 0.5 / sigma_squared
@@ -59,7 +59,7 @@ def tpu_smooth_l1(sigma=3.0):
 
             # compute the normalizer: the number of positive anchors
             positive_mask = tf.cast(tf.equal(anchor_state, 1), tf.int32)
-            normalizer = tf.count_nonzero(positive_mask, dtype=tf.float32)
+            normalizer = tf.math.count_nonzero(positive_mask, dtype=tf.float32)
             normalizer = tf.maximum(1.0, normalizer)
 
             # @TODO: Benchmark these two approaches to calculating total_loss
@@ -68,10 +68,10 @@ def tpu_smooth_l1(sigma=3.0):
             # Class loss is 0 for ignore anchors
             ignore_mask = tf.cast(
                 tf.not_equal(anchor_state, -1), regression_loss.dtype)
-            per_anchor_loss = tf.math.reduce_sum(regression_loss, axis=2)
+            per_anchor_loss = tf.math.reduce_sum(input_tensor=regression_loss, axis=2)
 
             per_anchor_loss_without_ignore = per_anchor_loss * ignore_mask
-            total_loss = tf.math.reduce_sum(per_anchor_loss_without_ignore)
+            total_loss = tf.math.reduce_sum(input_tensor=per_anchor_loss_without_ignore)
 
             return total_loss / normalizer
 
@@ -102,7 +102,7 @@ def tpu_focal(alpha=0.25, gamma=2.0):
             Focal loss is defined as
             FL(p_t) =−αt(1−p_t)^γ * log(p_t)
         """
-        with tf.name_scope("focal_loss"):
+        with tf.compat.v1.name_scope("focal_loss"):
             # shape (B, N, num_classes). Excludes anchor_state
             true_class = y_true[:, :, :-1]
             pred_class = y_pred
@@ -116,13 +116,13 @@ def tpu_focal(alpha=0.25, gamma=2.0):
 
             is_foreground = tf.equal(true_class, 1)
 
-            alpha_factor = tf.where(is_foreground,
+            alpha_factor = tf.compat.v1.where(is_foreground,
                                     x=_alpha,
                                     y=1 - _alpha,
                                     name="alphafactor")
 
             # (1 - 0.99) ** 2 = 1e-4, (1 - 0.9) ** 2 = 1e-2
-            focal_weight = tf.where(is_foreground,
+            focal_weight = tf.compat.v1.where(is_foreground,
                                     x=1 - pred_class,
                                     y=pred_class,
                                     name="alphaweight")
@@ -137,14 +137,14 @@ def tpu_focal(alpha=0.25, gamma=2.0):
             # Class loss is 0 for ignore anchors
             ignore_mask = tf.cast(
                 tf.not_equal(anchor_state, -1), cls_loss.dtype)
-            per_anchor_loss = tf.math.reduce_sum(cls_loss, axis=2)
+            per_anchor_loss = tf.math.reduce_sum(input_tensor=cls_loss, axis=2)
 
             per_anchor_loss_without_ignore = per_anchor_loss * ignore_mask
-            total_loss = tf.math.reduce_sum(per_anchor_loss_without_ignore)
+            total_loss = tf.math.reduce_sum(input_tensor=per_anchor_loss_without_ignore)
 
             # compute the normalizer: the number of positive anchors
             positive_mask = tf.cast(tf.equal(anchor_state, 1), tf.int32)
-            positive_count = tf.count_nonzero(positive_mask, dtype=tf.float32)
+            positive_count = tf.math.count_nonzero(positive_mask, dtype=tf.float32)
             normalizer = tf.maximum(1.0, positive_count)
 
             return total_loss / normalizer

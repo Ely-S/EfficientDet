@@ -42,7 +42,7 @@ def test_clip_boxes_layer_call():
 
     inputs = np.array([img, boxes])
 
-    with tf.Session().as_default():
+    with tf.compat.v1.Session().as_default():
 
         layer = ClipBoxes.ClipBoxes()
         result = layer.call(inputs)

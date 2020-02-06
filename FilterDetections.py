@@ -6,7 +6,7 @@ def filter_by_score_and_nms(
     scores_, labels_, score_threshold, boxes, max_detections, iou_threshold
 ):
     """Return indicies above a certain  threshold and apply NMS. """
-    indices_ = tf.where(keras.backend.greater(scores_, score_threshold))
+    indices_ = tf.compat.v1.where(keras.backend.greater(scores_, score_threshold))
 
     if iou_threshold > 0:
         filtered_boxes = tf.gather_nd(boxes, indices_)
@@ -105,9 +105,9 @@ def filter_detections(
 
     # zero pad the outputs
     pad_size = keras.backend.maximum(0, max_detections - keras.backend.shape(scores)[0])
-    boxes = tf.pad(boxes, [[0, pad_size], [0, 0]], constant_values=-1)
-    scores = tf.pad(scores, [[0, pad_size]], constant_values=-1)
-    labels = tf.pad(labels, [[0, pad_size]], constant_values=-1)
+    boxes = tf.pad(tensor=boxes, paddings=[[0, pad_size], [0, 0]], constant_values=-1)
+    scores = tf.pad(tensor=scores, paddings=[[0, pad_size]], constant_values=-1)
+    labels = tf.pad(tensor=labels, paddings=[[0, pad_size]], constant_values=-1)
     labels = keras.backend.cast(labels, "int32")
 
     # set shapes, since we know what they are

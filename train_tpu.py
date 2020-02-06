@@ -1,3 +1,4 @@
+import io
 import argparse
 from datetime import date
 import os
@@ -8,18 +9,17 @@ import logging
 import tensorflow as tf
 import tensorflow_datasets as tfds
 import cv2
+import h5py
 
-import utils.anchors
-from augmentor.color import VisualEffect
-from augmentor.misc import MiscEffect
 from model import efficientdet, image_sizes
+import utils.anchors
 from efficientnet import BASE_WEIGHTS_PATH, WEIGHTS_HASHES
-
 import utils
 import utils.anchors_tpu
 import utils.tpu as tpu
+import layers
 
-tf.debugging.set_log_device_placement(True)
+
 log = logging.getLogger(__file__)
 
 EFFICIENTNET_DEPTHS = [227, 329, 329, 374, 464, 566, 656]
@@ -98,26 +98,24 @@ def train_model(model, epochs,  steps_per_epoch,
     # @TODO: Add Exponential Decay
     # @TODO: Add Early Stopping
     # @TODO: Add Warmup
+    # @TODO: Add Tensorboard
     optimizer = tf.keras.optimizers.SGD(lr=.08, decay=4e-5, momentum=0.9)
 
     # alpha and gamma values come from the EfficientDet paper
     classification_loss = tpu.tpu_focal(alpha=0.25, gamma=1.5)
     regression_loss = tpu.tpu_smooth_l1()
 
-    # note: tfa is not supported by tf 1.15.0
-    # focal_loss = tfa.losses.SigmoidFocalCrossEntropy(alpha=.25, gamma=1.5)
-
     log.debug("Compiling model")
 
     # Work around for: https://github.com/tensorflow/tensorflow/issues/34199
-    model.compile(
-        optimizer=optimizer,
-        loss=[regression_loss, classification_loss])
+    # model.compile(
+    #     optimizer=optimizer,
+    #     loss=[regression_loss, classification_loss])
 
-    # model.compile(optimizer=optimizer, loss={
-    #     'classification': ,
-    #     'regression': ,
-    # })
+    model.compile(optimizer=optimizer, loss={
+        'classification': classification_loss,
+        'regression': regression_loss,
+    })
 
     log.debug("Fitting model")
 
@@ -183,8 +181,8 @@ def main(args=None):
     def parse_example_file(serialized_example, *args):
         # example = tf.train.Example.ParseFromString(tfrecord)
 
-        example = tf.io.parse_single_example(serialized_example,
-                                             image_feature_description)
+        example = tf.io.parse_single_example(serialized=serialized_example,
+                                             features=image_feature_description)
 
         # PNGs are represented as uints, which is why they are unscaled
         png = tf.io.decode_png(example["image"])
@@ -236,10 +234,11 @@ def main(args=None):
 
     distribution_strategy = tpu.get_strategy()
 
-    tf.debugging.set_log_device_placement(True)
+    model_bytes = io.BytesIO()
 
+    # Start a session just to build the model and load the weights
+    # then throw it awayt
     with start_session():
-
         log.debug("Creating model")
         local_model = efficientdet(
             args.phi,
@@ -258,43 +257,40 @@ def main(args=None):
             for i in range(1, EFFICIENTNET_DEPTHS[args.phi]):
                 local_model.layers[i].trainable = False
 
-        saved_model_path = "/tmp/tf_save"
-        log.debug("Saving temp model to %s", saved_model_path)
-        tf.saved_model.save(local_model, saved_model_path)
-        log.debug("saved model")
+        h5file = h5py.File(model_bytes, "w")
+        tf.keras.models.save_model(local_model, h5file, save_format="h5")
 
     log.debug("Entering Distribution Strategy")
     with distribution_strategy.scope():
-        # Clear memory from the previous model
-        with start_session():
+        log.debug("Loading model across cluster")
 
-            tf.debugging.set_log_device_placement(True)
+        # Recreate the exact same model
+        model = tf.keras.models.load_model(
+            h5py.File(model_bytes, "r"),
+            compile=False  # This gets compiled later
+        )
 
-            log.debug("Loading model across cluster")
-            model = tf.keras.models.load_model(saved_model_path)
-            log.debug("loaded model")
+        log.debug("Loaded model")
 
-            if args.debug:
-                physical_devices = tf.config.experimental_list_devices()
-                log.debug("Processors %s", physical_devices)
-                tf.debugging.set_log_device_placement(True)
+        if args.debug:
+            physical_devices = tf.config.list_physical_devices()
+            log.debug("Processors %s", physical_devices)
 
-            global_batch_size = (batch_size *
-                                 distribution_strategy.num_replicas_in_sync)
+        global_batch_size = (batch_size *
+                             distribution_strategy.num_replicas_in_sync)
 
-            train_data = input_data(
-                global_batch_size, "gs://ondaka-ml-data/dev/run1/train")
-            val_data = input_data(
-                global_batch_size, "gs://ondaka-ml-data/dev/run1/val")
+        train_data = input_data(
+            global_batch_size, "gs://ondaka-ml-data/dev/run1/train")
+        val_data = input_data(
+            global_batch_size, "gs://ondaka-ml-data/dev/run1/val")
 
-            log.debug("Starting to train")
-            train_model(model, args.epochs, steps_per_epoch,
-                        steps_per_val_epoch, train_data, val_data)
+        log.debug("Starting to train")
+        train_model(model, args.epochs, steps_per_epoch,
+                    steps_per_val_epoch, train_data, val_data)
 
 
 def start_session():
     config = tf.compat.v1.ConfigProto()
-    # config.gpu_options.allow_growth = True
     session = tf.compat.v1.Session(config=config, graph=tf.Graph())
     tf.compat.v1.keras.backend.set_session(session)
     return session
@@ -307,7 +303,6 @@ if __name__ == '__main__':
 
     if args.debug:
         log.setLevel(logging.DEBUG)
-        tf.debugging.set_log_device_placement(True)
         log.debug("args %s", args)
 
     object_scope = tf.keras.utils.custom_object_scope({

@@ -38,7 +38,7 @@ outcome = np.array([[[0.02, 0.02, 1.02, 1.02], [0.496, 0.496, 0.604, 0.604]]])
 def test_apply_bbox_deltas():
     """Test code that computes deltas from anchor boxes."""
 
-    with tf.Session().as_default():
+    with tf.compat.v1.Session().as_default():
         pred_boxes = RegressBoxes.apply_bbox_deltas(boxes, deltas)
 
         res = pred_boxes.eval()
@@ -60,7 +60,7 @@ def test_regress_boxes_layer_set_anchors():
     Make sure RegressBoxes works when anchors are baked-in as weights.
     """
 
-    with tf.Session().as_default():
+    with tf.compat.v1.Session().as_default():
         layer_baked = RegressBoxes.RegressBoxes(anchor_shape=boxes.shape)
         layer_baked.set_anchors(boxes)
 
@@ -75,7 +75,7 @@ def test_regress_boxes_layer_input_anchors():
     as an input.
     """
 
-    with tf.Session().as_default():
+    with tf.compat.v1.Session().as_default():
         layer = RegressBoxes.RegressBoxes()
 
         out = layer([boxes, deltas])

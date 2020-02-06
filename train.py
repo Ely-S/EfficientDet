@@ -51,9 +51,9 @@ def get_session():
     """
     Construct a modified tf session.
     """
-    config = tf.ConfigProto()
+    config = tf.compat.v1.ConfigProto()
     config.gpu_options.allow_growth = True
-    return tf.Session(config=config)
+    return tf.compat.v1.Session(config=config)
 
 
 def create_callbacks(training_model, prediction_model, validation_generator, args):

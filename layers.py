@@ -8,35 +8,6 @@ from ClipBoxes import ClipBoxes
 from FilterDetections import FilterDetections
 
 
-class BatchNormalization(keras.layers.BatchNormalization):
-    """
-    Identical to keras.layers.BatchNormalization, but adds
-    the option to freeze parameters.
-    """
-
-    def __init__(self, freeze, *args, **kwargs):
-        self.freeze = freeze
-        super(BatchNormalization, self).__init__(*args, **kwargs)
-
-        # set to non-trainable if freeze is true
-        self.trainable = not self.freeze
-
-    def call(self, inputs, training=None, **kwargs):
-        # return super.call, but set training
-        if training:
-            return super(BatchNormalization, self).call(
-                inputs, training=(not self.freeze)
-            )
-        else:
-            return super(BatchNormalization, self).call(inputs, training=False)
-
-    def get_config(self):
-        config = super(BatchNormalization, self).get_config()
-        # @NOTE: TFJS Converter does not understand this
-        config.update({"freeze": self.freeze})
-        return config
-
-
 class wBiFPNAdd(keras.layers.Layer):
     def __init__(self, epsilon=1e-4, **kwargs):
         super(wBiFPNAdd, self).__init__(**kwargs)
@@ -55,8 +26,8 @@ class wBiFPNAdd(keras.layers.Layer):
     def call(self, inputs, **kwargs):
         w = keras.activations.relu(self.w)
         elementwise_multiply = [w[i] * inputs[i] for i in range(len(inputs))]
-        x = tf.reduce_sum(elementwise_multiply, axis=0)
-        x = x / (tf.reduce_sum(w) + self.epsilon)
+        x = tf.reduce_sum(input_tensor=elementwise_multiply, axis=0)
+        x = x / (tf.reduce_sum(input_tensor=w) + self.epsilon)
         return x
 
     def compute_output_shape(self, input_shape):
@@ -66,4 +37,3 @@ class wBiFPNAdd(keras.layers.Layer):
         config = super(wBiFPNAdd, self).get_config()
         config.update({"epsilon": self.epsilon})
         return config
-

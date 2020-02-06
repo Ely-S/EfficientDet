@@ -42,7 +42,6 @@ from tensorflow import keras
 import tensorflow as tf
 
 from utils import get_submodules_from_kwargs
-from layers import BatchNormalization
 
 backend = None
 layers = None
@@ -232,8 +231,10 @@ def mb_conv_block(inputs, block_args, activation, drop_rate=None, prefix='', fre
                           use_bias=False,
                           kernel_initializer=CONV_KERNEL_INITIALIZER,
                           name=prefix + 'expand_conv')(inputs)
-        x = BatchNormalization(
-            freeze=freeze_bn, axis=bn_axis, name=prefix + 'expand_bn')(x)
+        x = layers.BatchNormalization(
+            trainable=not freeze_bn,
+            axis=bn_axis,
+            name=prefix + 'expand_bn')(x)
         x = layers.Activation(activation, name=prefix + 'expand_activation')(x)
     else:
         x = inputs
@@ -245,8 +246,10 @@ def mb_conv_block(inputs, block_args, activation, drop_rate=None, prefix='', fre
                                use_bias=False,
                                depthwise_initializer=CONV_KERNEL_INITIALIZER,
                                name=prefix + 'dwconv')(x)
-    x = BatchNormalization(
-        freeze=freeze_bn, axis=bn_axis, name=prefix + 'bn')(x)
+    x = layers.BatchNormalization(
+        trainable=not freeze_bn,
+        axis=bn_axis,
+        name=prefix + 'bn')(x)
     x = layers.Activation(activation, name=prefix + 'activation')(x)
 
     # Squeeze and Excitation phase
@@ -289,8 +292,9 @@ def mb_conv_block(inputs, block_args, activation, drop_rate=None, prefix='', fre
                       use_bias=False,
                       kernel_initializer=CONV_KERNEL_INITIALIZER,
                       name=prefix + 'project_conv')(x)
-    x = BatchNormalization(freeze=freeze_bn, axis=bn_axis,
-                           name=prefix + 'project_bn')(x)
+    x = layers.BatchNormalization(trainable=not freeze_bn,
+                                  axis=bn_axis,
+                                  name=prefix + 'project_bn')(x)
     if block_args.id_skip and all(
             s == 1 for s in block_args.strides
     ) and block_args.input_filters == block_args.output_filters:
@@ -413,7 +417,10 @@ def EfficientNet(width_coefficient,
                       use_bias=False,
                       kernel_initializer=CONV_KERNEL_INITIALIZER,
                       name='stem_conv')(x)
-    x = BatchNormalization(freeze=freeze_bn, axis=bn_axis, name='stem_bn')(x)
+    x = layers.BatchNormalization(
+        trainable=not freeze_bn,
+        axis=bn_axis,
+        name='stem_bn')(x)
     x = layers.Activation(activation, name='stem_activation')(x)
 
     # Build blocks

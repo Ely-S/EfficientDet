@@ -19,4 +19,3 @@ termcolor==1.1.0
 tqdm==4.42.1
 urllib3==1.25.8
 wrapt==1.11.2
-Pillow==Pillow-7.0.0

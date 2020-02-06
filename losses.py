@@ -54,7 +54,7 @@ def tpu_focal(alpha=0.25, gamma=2.0):
         classification = y_pred
 
         # filter out "ignore" anchors
-        indices = tf.where(tf.not_equal(anchor_state, -1))
+        indices = tf.compat.v1.where(tf.not_equal(anchor_state, -1))
         labels = tf.gather_nd(labels, indices)
         classification = tf.gather_nd(classification, indices)
 
@@ -63,12 +63,12 @@ def tpu_focal(alpha=0.25, gamma=2.0):
 
         foreground = tf.equal(labels, 1)
 
-        alpha_factor = tf.where(foreground,
+        alpha_factor = tf.compat.v1.where(foreground,
                                 x=alpha_factor,
                                 y=1 - alpha_factor)
 
         # (1 - 0.99) ** 2 = 1e-4, (1 - 0.9) ** 2 = 1e-2
-        focal_weight = tf.where(foreground,
+        focal_weight = tf.compat.v1.where(foreground,
                                 x=1 - classification,
                                 y=classification)
 
@@ -78,8 +78,8 @@ def tpu_focal(alpha=0.25, gamma=2.0):
             keras.backend.binary_crossentropy(labels, classification)
 
         # compute the normalizer: the number of positive anchors
-        normalizer = tf.where(keras.backend.equal(anchor_state, 1))
-        normalizer = tf.cast(tf.shape(normalizer)[0], tf.float32)
+        normalizer = tf.compat.v1.where(keras.backend.equal(anchor_state, 1))
+        normalizer = tf.cast(tf.shape(input=normalizer)[0], tf.float32)
         normalizer = tf.maximum(
             keras.backend.cast_to_floatx(1.0), normalizer)
 
@@ -117,7 +117,7 @@ def smooth_l1(sigma=3.0):
 
         # filter out "ignore" anchors
         x = keras.backend.equal(anchor_state, 1)
-        indices = tf.where(x)
+        indices = tf.compat.v1.where(x)
 
         # THIS DOES NOT WORK becuse where is broke
         # tf.keras
@@ -129,7 +129,7 @@ def smooth_l1(sigma=3.0):
         #        |x| - 0.5 / sigma / sigma    otherwise
         regression_diff = regression - regression_target
         regression_diff = keras.backend.abs(regression_diff)
-        regression_loss = tf.where(
+        regression_loss = tf.compat.v1.where(
             keras.backend.less(regression_diff, 1.0 / sigma_squared),
             0.5 * sigma_squared * keras.backend.pow(regression_diff, 2),
             regression_diff - 0.5 / sigma_squared
@@ -203,14 +203,14 @@ def tpu_smooth_l1(sigma=3.0):
 
         regression_diff = tf.math.abs(regression_diff)
 
-        regression_loss = tf.where(
+        regression_loss = tf.compat.v1.where(
             keras.backend.less(regression_diff, 1.0 / sigma_squared),
             0.5 * sigma_squared * keras.backend.pow(regression_diff, 2),
             regression_diff - 0.5 / sigma_squared
         )
 
         # compute the normalizer: the number of positive anchors
-        normalizer = tf.maximum(1, tf.shape(regression_loss)[0])
+        normalizer = tf.maximum(1, tf.shape(input=regression_loss)[0])
 
         normalizer = tf.cast(normalizer, tf.float32)
 
