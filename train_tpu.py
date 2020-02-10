@@ -12,6 +12,7 @@ import tensorflow_datasets as tfds
 import cv2
 import h5py
 
+from utils.lr_schedule import get_cosine_decay_with_linear_warmup
 from model import efficientdet, image_sizes
 import utils.anchors
 from efficientnet import BASE_WEIGHTS_PATH, WEIGHTS_HASHES
@@ -42,7 +43,9 @@ def parse_args():
                         help='Train on this stock dataset. See: https://www.tensorflow.org/datasets/catalog/voc')
 
     parser.add_argument('--log-dir', type=str,
-                        help='Destination for Tensorboard logs')
+                        required=True,
+                        help='Destination for Tensorboard logs. '
+                             'Must start with gs:// for distributed training')
 
     parser.add_argument('--weights', default=None,
                         help='Initialize weights using file.')
@@ -214,20 +217,17 @@ def main(args=None):
 
     checkpoint_dir = pathlib.Path(args.checkpoints)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_path = str(checkpoint_dir / 'weights.{epoch:02d}.h5')
+    checkpoint_path = str(checkpoint_dir / 'checkpoint.{epoch:02d}.h5')
 
     def train_model(model, validation_steps, train_data, val_data):
 
         # The Optimizer
         # See https://github.com/shaoanlu/dogs-vs-cats-redux/blob/master/opt_experiment.ipynb
         # for benchmark of optimizers.
-        # @TODO: Tune this
-        # @TODO: Add Exponential Decay
-        # @TODO: Add Early Stopping
-        # @TODO: Add Warmup
-        # @TODO: Add Tensorboard
+        #
+        # These values come from the paper.
         optimizer = tf.keras.optimizers.SGD(
-            lr=.05, decay=4e-5, momentum=0.9)
+            lr=0.0, decay=4e-5, momentum=0.9)
 
         # alpha and gamma values come from the EfficientDet paper
         classification_loss = tpu.tpu_focal(alpha=0.25, gamma=1.5)
@@ -240,12 +240,20 @@ def main(args=None):
             verbose=1
         )
 
+        # This is the schedule described in the paper
+        warmup_and_decay_lr = get_cosine_decay_with_linear_warmup(
+            total_epochs=args.epochs,
+            verbose=True)
+
+        log.debug("Saving checkpoints as %s", checkpoint_path)
+
         callbacks = [
             tf.keras.callbacks.TensorBoard(
                 log_dir=args.log_dir,
                 write_graph=True
             ),
-            checkpointer
+            warmup_and_decay_lr,
+            checkpointer,
         ]
 
         model.compile(
@@ -266,6 +274,7 @@ def main(args=None):
             validation_data=val_data,
             validation_steps=validation_steps,
             epochs=args.epochs)
+
     distribution_strategy = tpu.get_strategy()
 
     model_bytes = io.BytesIO()
