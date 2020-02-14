@@ -21,10 +21,13 @@ import utils.anchors_tpu
 import utils.tpu as tpu
 import layers
 
+from utils.train import load_weights, check_values
 
 log = logging.getLogger(__file__)
 
 EFFICIENTNET_DEPTHS = [227, 329, 329, 374, 464, 566, 656]
+
+tf.compat.v1.disable_eager_execution()
 
 
 def parse_args():
@@ -43,22 +46,38 @@ def parse_args():
                         help='Train on this stock dataset. See: https://www.tensorflow.org/datasets/catalog/voc')
 
     parser.add_argument('--log-dir', type=str,
-                        required=True,
                         help='Destination for Tensorboard logs. '
-                             'Must start with gs:// for distributed training')
+                             'Should start with gs:// for TPU training')
 
     parser.add_argument('--weights', default=None,
                         help='Initialize weights using file.')
-
-    parser.add_argument('--cache', default=False,
-                        action="store_true",
-                        help='Store TF records in memory')
 
     parser.add_argument(
         '--epochs', help='Number of epochs to train. An epoch is a pass over the whole dataset', type=int, default=50)
 
     parser.add_argument(
-        '--batch-size', help='Size of the batch in each pass.', default=32, type=int)
+        '--batch-size', help='Size of the batch per device in each pass. 12 is good size for a 16GB V100 GPU.', default=32, type=int)
+
+    parser.add_argument(
+        '--restore',
+        help='Restore training from latest checkpoint',
+        action="store_true")
+
+    parser.add_argument('--cache', default=False,
+                        action="store_true",
+                        help='Cache TF records locally')
+
+    parser.add_argument(
+        '--cache-dir',
+        default="",
+        help='Cache tfrecords in this dir. If --cache is given '
+        'and this argument left blank,  cache is stored in memory.')
+
+    parser.add_argument("--q-size",
+                        type=int,
+                        help="Prefetch this number of input examples. Higher numbers "
+                             "Increases memory usage.",
+                        default=tf.data.experimental.AUTOTUNE)
 
     parser.add_argument(
         '--freeze-backbone', help='Freeze training of backbone layers.', action='store_true')
@@ -71,11 +90,30 @@ def parse_args():
         default=tf.data.experimental.AUTOTUNE)
 
     parser.add_argument(
-        "--steps",
-        help="steps per epoch",
-        default=1000,
+        "--shuffle",
+        help="Number of input examples to shuffle. Higher values use more memory.",
+        default=300,
         type=int
     )
+
+    parser.add_argument(
+        "--steps",
+        help="steps per epoch",
+        default=200,
+        type=int
+    )
+
+    parser.add_argument(
+        "--n-val",
+        help="Number of validation examples. Validation"
+             "steps is calculated as = n-val / batch-size",
+        default=2500,
+        type=int
+    )
+    parser.add_argument("--check-input", action="store_true", default=False)
+
+    parser.add_argument('--pu', help="Type of processing unit to use. Defaults to 'tpu'",
+                        default="tpu", type=str, choices=["tpu", "gpu", "cpu"])
 
     parser.add_argument(
         '--checkpoints',
@@ -87,54 +125,6 @@ def parse_args():
 
     parsed_args = parser.parse_args()
     return parsed_args
-
-
-def load_weights(model, weights, phi):
-    if weights:
-        log.debug('Loading weights, this may take a second...')
-        model.load_weights(weights, by_name=True)
-        log.debug("done loading model")
-    else:
-        log.debug("Downloading Weights")
-        model_name = 'efficientnet-b{}'.format(phi)
-        file_name = '{}_weights_tf_dim_ordering_tf_kernels_autoaugment_notop.h5'.format(
-            model_name)
-        file_hash = WEIGHTS_HASHES[model_name][1]
-        weights_path = tf.keras.utils.get_file(file_name,
-                                               BASE_WEIGHTS_PATH + file_name,
-                                               cache_subdir='models',
-                                               file_hash=file_hash)
-        log.debug("Loading weights")
-        model.load_weights(weights_path, by_name=True)
-        log.debug("Loaded weigths")
-
-
-def check_values(image, labels):
-    regression_target, labels_target = labels
-
-    tf.compat.v1.debugging.assert_all_finite(
-        image, "Image contains NaN or Infinity")
-
-    tf.compat.v1.debugging.assert_type(
-        image, tf.float32,
-        message="Input image must be a float32")
-
-    tf.compat.v1.debugging.assert_all_finite(
-        regression_target, "Regression target contains NaN or Infinity")
-
-    tf.compat.v1.debugging.assert_type(
-        regression_target, tf.float32,
-        message="input regression boxes must be a float32")
-
-    tf.compat.v1.debugging.assert_all_finite(
-        labels_target, "Labels contains Nan or Infinity")
-
-    tf.compat.v1.assert_greater_equal(
-        labels_target[:, :-1], tf.cast(0, tf.float32),
-        summarize=100,
-        message="class labels are not everywhere >=0")
-
-    return image, labels
 
 
 def main(args=None):
@@ -182,7 +172,7 @@ def main(args=None):
 
         return image, (regression_target, label_target)
 
-    def input_data(global_batch_size, folder):
+    def input_data(global_batch_size, folder, validation=False):
         files = tf.data.Dataset.list_files(os.path.join(folder, "*.tfrecord"))
 
         dataset = tf.data.TFRecordDataset(
@@ -190,36 +180,58 @@ def main(args=None):
             num_parallel_reads=workers)
 
         if args.cache:
-            dataset = dataset.cache()
+            if args.cache_dir != "":
+                cache_dir = pathlib.Path(args.cache_dir)
+                cache_dir.mkdir(parents=True, exist_ok=True)
 
-        # Shuffle before repeat so that every record appears
-        # in every batch
-        dataset = dataset.shuffle(1000)
+                # There should be seperate cache files for
+                #  train, test, and validation sets
+                cacheFile = str(cache_dir / folder.replace("/", "_"))
+
+                dataset = dataset.cache(cacheFile)
+            else:
+                # Cache in memory
+                dataset = dataset.cache()
+
+        if not validation:
+            # Shuffle before repeat so that every record appears
+            # equally in every batch. This is unnecessary for validation
+            # Which should include every validation example.
+            dataset = dataset.shuffle(args.shuffle)
 
         # Keras expects a generator that lasts forever
         dataset = dataset.repeat()
 
+        # Decode the images here to avoid buffering raw image data
         dataset = dataset.map(parse_example_file, workers)
 
-        if args.debug:
+        if args.check_input:
             dataset = dataset.map(check_values)
 
-        # drop_remainder is important on TPU, batch size must be fixed
+        # Load next item before it is needed
+        dataset = dataset.prefetch(args.q_size)
+
+        # batch size must be fixed for TPU, so drop_remainder=True
         dataset = dataset.batch(global_batch_size, drop_remainder=True)
 
-        # Load next batch before it is needed
-        prefetched = dataset.prefetch(tf.data.experimental.AUTOTUNE)
+        return dataset
 
-        return prefetched
+    # Validation size
+    steps_per_val_epoch = math.ceil(args.n_val / batch_size)
 
-    # number is samples in voc validation
-    steps_per_val_epoch = math.ceil(2501 / batch_size)
+    def build_model():
+        log.debug("Creating Model")
 
-    checkpoint_dir = pathlib.Path(args.checkpoints)
-    checkpoint_dir.mkdir(parents=True, exist_ok=True)
-    checkpoint_path = str(checkpoint_dir / 'checkpoint.{epoch:02d}.h5')
+        model = efficientdet(
+            args.phi,
+            num_classes=num_classes,
+            just_training_model=True,
+            weighted_bifpn=args.weighted_bifpn,
+            freeze_bn=args.freeze_batchnorm)
 
-    def train_model(model, validation_steps, train_data, val_data):
+        # alpha and gamma values come from the EfficientDet paper
+        classification_loss = tpu.tpu_focal(alpha=0.25, gamma=1.5)
+        regression_loss = tpu.tpu_smooth_l1()
 
         # The Optimizer
         # See https://github.com/shaoanlu/dogs-vs-cats-redux/blob/master/opt_experiment.ipynb
@@ -227,34 +239,9 @@ def main(args=None):
         #
         # These values come from the paper.
         optimizer = tf.keras.optimizers.SGD(
-            lr=0.0, decay=4e-5, momentum=0.9)
-
-        # alpha and gamma values come from the EfficientDet paper
-        classification_loss = tpu.tpu_focal(alpha=0.25, gamma=1.5)
-        regression_loss = tpu.tpu_smooth_l1()
+            lr=0.01, decay=4e-5, momentum=0.9)
 
         log.debug("Compiling model")
-
-        checkpointer = tf.keras.callbacks.ModelCheckpoint(
-            filepath=checkpoint_path,
-            verbose=1
-        )
-
-        # This is the schedule described in the paper
-        warmup_and_decay_lr = get_cosine_decay_with_linear_warmup(
-            total_epochs=args.epochs,
-            verbose=True)
-
-        log.debug("Saving checkpoints as %s", checkpoint_path)
-
-        callbacks = [
-            tf.keras.callbacks.TensorBoard(
-                log_dir=args.log_dir,
-                write_graph=True
-            ),
-            warmup_and_decay_lr,
-            checkpointer,
-        ]
 
         model.compile(
             optimizer=optimizer,
@@ -264,75 +251,130 @@ def main(args=None):
             },
         )
 
-        log.debug("Fitting model")
+        # @TODO(ELI): Try loading the model outside the distribution scope
 
-        model.fit(
-            train_data,
-            callbacks=callbacks,
-            verbose=1,
-            steps_per_epoch=args.steps,
-            validation_data=val_data,
-            validation_steps=validation_steps,
-            epochs=args.epochs)
+        # loading weights must be done after compiling due to a TF issue
+        if args.restore:
+            checkpoint = tf.train.latest_checkpoint(args.checkpoints)
 
-    distribution_strategy = tpu.get_strategy()
+            if checkpoint is None:
+                raise ValueError(
+                    "--restore option given but no previous checkpoint found to restore from.")
 
-    model_bytes = io.BytesIO()
+            if args.weights:
+                raise ValueError(
+                    "--restore and --weights should not both be present.")
 
-    # Start a session just to build the model and load the weights
-    # then throw it away
-    with start_session():
-        log.debug("Creating model")
-        local_model = efficientdet(
-            args.phi,
-            num_classes=num_classes,
-            just_training_model=True,
-            weighted_bifpn=args.weighted_bifpn,
-            freeze_bn=args.freeze_batchnorm)
+            load_weights(model, checkpoint, args.phi, log)
 
-        log.debug("Created Model")
-
-        load_weights(local_model, args.weights, args.phi)
+        else:
+            load_weights(model, args.weights, args.phi, log)
 
         # freeze backbone layers
         if args.freeze_backbone:
             for i in range(1, EFFICIENTNET_DEPTHS[args.phi]):
-                local_model.layers[i].trainable = False
+                model.layers[i].trainable = False
 
-        h5file = h5py.File(model_bytes, "w")
-        tf.keras.models.save_model(local_model, h5file, save_format="h5")
+        return model
+
+    start_session()
+
+    if args.pu == "tpu":
+        distribution_strategy = tpu.get_strategy()
+    elif args.pu == "cpu":
+        distribution_strategy = tf.distribute.OneDeviceStrategy('/CPU')
+    elif args.pu == "gpu":
+        distribution_strategy = tf.distribute.MirroredStrategy()
+    else:
+        raise ValueError("%s Not a valid processing unit", args.pu)
 
     log.debug("Entering Distribution Strategy")
+
+    callbacks = get_callbacks(args)
+
     with distribution_strategy.scope():
-        log.debug("Loading model across cluster")
-
-        # Recreate the exact same model
-        model = tf.keras.models.load_model(
-            h5py.File(model_bytes, "r"),
-            compile=False  # This gets compiled later
-        )
-
-        log.debug("Loaded model")
-
-        if args.debug:
-            physical_devices = tf.config.list_physical_devices()
-            log.debug("Processors %s", physical_devices)
+        log.debug("Number of devices: %s",
+                  distribution_strategy.num_replicas_in_sync)
 
         global_batch_size = (batch_size *
                              distribution_strategy.num_replicas_in_sync)
 
+        log.debug("Global Batch Size %s", global_batch_size)
+
+        model = build_model()
+        log.debug("Built model")
+
         train_data = input_data(
             global_batch_size, "gs://ondaka-ml-data/dev/run1/train")
         val_data = input_data(
-            global_batch_size, "gs://ondaka-ml-data/dev/run1/val")
+            global_batch_size, "gs://ondaka-ml-data/dev/run1/val",
+            validation=True)
 
-        log.debug("Starting to train")
-        train_model(model, steps_per_val_epoch, train_data, val_data)
+        # Fitting happens outside of scope
+        log.debug("Fitting model")
+        history = model.fit(
+            train_data,
+
+            # Saving model does not work inside of scoe
+            callbacks=callbacks,
+
+            # Print porgress bar
+            verbose=1,
+
+            steps_per_epoch=args.steps,
+
+            # Last change
+            validation_steps=steps_per_val_epoch,
+            validation_data=val_data,
+
+            # Validation does not seem to work on tpus
+            epochs=args.epochs
+        )
 
 
-def start_session():
+def get_callbacks(args):
+    checkpoint_dir = pathlib.Path(args.checkpoints)
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_prefix = str(
+        checkpoint_dir /
+        "checkpoint_{epoch}_{val_loss}_{val_regression_loss}_{val_classification_loss}")
+
+    class Saver(tf.keras.callbacks.Callback):
+        # This seems to be faster than the tf.keras callback
+        def on_epoch_end(self, epoch, logs):
+            fname = checkpoint_prefix.format(epoch=epoch, **logs)
+            log.debug("saving to %s", fname)
+            self.model.save_weights(fname,
+                                    # Saving the whole things takes a long time
+                                    overwrite=True,
+                                    save_format="tf")
+            log.debug("saved %s", fname)
+
+    # This is the schedule described in the paper
+    warmup_and_decay_lr = get_cosine_decay_with_linear_warmup(
+        learning_rate_start=0.05,
+        total_epochs=args.epochs,
+        verbose=True)
+
+    log.debug("Saving checkpoints as '%s'", checkpoint_prefix)
+
+    callbacks = [
+        warmup_and_decay_lr,
+        Saver(),
+    ]
+
+    if args.log_dir:
+        tb = tf.keras.callbacks.TensorBoard(
+            log_dir=args.log_dir,
+        )
+        callbacks.append(tb)
+
+    return callbacks
+
+
+def start_session(target=''):
     config = tf.compat.v1.ConfigProto()
-    session = tf.compat.v1.Session(config=config, graph=tf.Graph())
+    session = tf.compat.v1.Session(target, config=config)
     tf.compat.v1.keras.backend.set_session(session)
     return session
 
@@ -343,6 +385,7 @@ if __name__ == '__main__':
     args = parse_args()
 
     if args.debug:
+        tf.get_logger().setLevel(logging.DEBUG)
         log.setLevel(logging.DEBUG)
         log.debug("args %s", args)
 

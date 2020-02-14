@@ -1,5 +1,6 @@
 import tensorflow as tf
 
+import os
 # The documentation on thsi takes some digigng to find, so here it is.
 # See:https://www.tensorflow.org/api_docs/python/tf/distribute/experimental/TPUStrategy
 # Example: https://colab.research.google.com/github/tensorflow/tpu/blob/master/tools/colab/keras_mnist_tpu.ipynb
@@ -8,14 +9,16 @@ import tensorflow as tf
 
 def get_strategy():
     resolver = tf.distribute.cluster_resolver.TPUClusterResolver(
-        # coordinator_name='host'
+        os.environ['TPU_NAME'],
+        # coordinator_name='host',
     )
 
     tf.config.experimental_connect_to_cluster(resolver)
 
     tf.tpu.experimental.initialize_tpu_system(resolver)
 
-    strategy = tf.distribute.experimental.TPUStrategy(resolver)
+    # strategy = tf.distribute.experimental.TPUStrategy(resolver)
+    strategy = tf.compat.v1.distribute.experimental.TPUStrategy(resolver)
 
     return strategy
 
@@ -103,13 +106,13 @@ def tpu_focal(alpha=0.25, gamma=2.0):
             FL(p_t) =−αt(1−p_t)^γ * log(p_t)
         """
         with tf.compat.v1.name_scope("focal_loss"):
-            # shape (B, N, num_classes). Excludes anchor_state
-            true_class = y_true[:, :, :-1]
-            pred_class = y_pred
-
             # anchor state is -1 for ignore, 0 for background, 1 for object
             anchor_state = y_true[:, :, -1]
             # anchor state shape is (B, N)
+
+            # shape (B, N, num_classes). Excludes anchor_state
+            true_class = y_true[:, :, :-1]
+            pred_class = y_pred
 
             # compute the focal loss
             _alpha = alpha + tf.zeros_like(true_class)
@@ -121,7 +124,6 @@ def tpu_focal(alpha=0.25, gamma=2.0):
                                               y=1 - _alpha,
                                               name="alphafactor")
 
-            # (1 - 0.99) ** 2 = 1e-4, (1 - 0.9) ** 2 = 1e-2
             focal_weight = tf.compat.v1.where(is_foreground,
                                               x=1 - pred_class,
                                               y=pred_class,
@@ -129,12 +131,11 @@ def tpu_focal(alpha=0.25, gamma=2.0):
 
             focal_weight = alpha_factor * focal_weight ** gamma
 
-            # focal_weight = ignore_
             cls_loss = focal_weight * \
                 tf.keras.backend.binary_crossentropy(
                     true_class, pred_class)
 
-            # Class loss is 0 for ignore anchors
+            # Class loss is 0 for ignored (-1) anchors
             ignore_mask = tf.cast(
                 tf.not_equal(anchor_state, -1), cls_loss.dtype)
             per_anchor_loss = tf.math.reduce_sum(input_tensor=cls_loss, axis=2)
