@@ -31,7 +31,7 @@ def tpu_smooth_l1(lambda_=1):
         sigma: This argument defines the point where the loss changes from L2 to L1.
     """
 
-    def _smooth_l1(y_true, y_pred):
+    def smooth_l1_loss(y_true, y_pred):
         """ Compute the Smooth L1 loss of bounding box predictions
 
         See: https://arxiv.org/pdf/1504.08083.pdf page 3 for a definition.
@@ -78,7 +78,7 @@ def tpu_smooth_l1(lambda_=1):
 
             return total_loss / normalizer
 
-    return _smooth_l1
+    return smooth_l1_loss
 
 
 def tpu_focal(alpha=0.25, gamma=2.0):
@@ -89,7 +89,7 @@ def tpu_focal(alpha=0.25, gamma=2.0):
         alpha: Scale the focal weight with alpha.
         gamma: Take the power of the focal weight with gamma.
     """
-    def _focal(y_true, y_pred):
+    def focal_loss(y_true, y_pred):
         """
         Compute the focal loss given the target tensor and the predicted tensor.
 
@@ -152,4 +152,4 @@ def tpu_focal(alpha=0.25, gamma=2.0):
 
             return total_loss / normalizer
 
-    return _focal
+    return focal_loss

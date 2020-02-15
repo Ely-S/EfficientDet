@@ -1,27 +1,23 @@
-import io
-import argparse
-from datetime import date
+import glob
 import os
 import sys
 import math
 import logging
 import pathlib
+import argparse
+from datetime import date
 
 import tensorflow as tf
 import tensorflow_datasets as tfds
-import cv2
 import h5py
 
 from utils.lr_schedule import get_cosine_decay_with_linear_warmup
 from model import efficientdet, image_sizes
-import utils.anchors
-from efficientnet import BASE_WEIGHTS_PATH, WEIGHTS_HASHES
-import utils
-import utils.anchors_tpu
 import utils.tpu as tpu
-import layers
+import utils.anchors
+import utils
 
-from utils.train import load_weights, check_values
+from utils.train import load_weights, check_values, CheckpointSaver
 
 log = logging.getLogger(__file__)
 
@@ -54,6 +50,8 @@ def parse_args():
 
     parser.add_argument(
         '--epochs', help='Number of epochs to train. An epoch is a pass over the whole dataset', type=int, default=50)
+
+    parser.add_argument("--initial-epoch", default=0, type=int)
 
     parser.add_argument(
         '--batch-size', help='Size of the batch per device in each pass. 12 is good size for a 16GB V100 GPU.', default=32, type=int)
@@ -151,7 +149,6 @@ def main(args=None):
     }
 
     def parse_example_file(serialized_example, *args):
-        # example = tf.train.Example.ParseFromString(tfrecord)
 
         example = tf.io.parse_single_example(serialized=serialized_example,
                                              features=image_feature_description)
@@ -219,66 +216,6 @@ def main(args=None):
     # Validation size
     steps_per_val_epoch = math.ceil(args.n_val / batch_size)
 
-    def build_model():
-        log.debug("Creating Model")
-
-        model = efficientdet(
-            args.phi,
-            num_classes=num_classes,
-            just_training_model=True,
-            weighted_bifpn=args.weighted_bifpn,
-            freeze_bn=args.freeze_batchnorm)
-
-        # alpha and gamma values come from the EfficientDet paper
-        classification_loss = tpu.tpu_focal(alpha=0.25, gamma=1.5)
-        regression_loss = tpu.tpu_smooth_l1()
-
-        # The Optimizer
-        # See https://github.com/shaoanlu/dogs-vs-cats-redux/blob/master/opt_experiment.ipynb
-        # for benchmark of optimizers.
-        #
-        # These values come from the paper.
-        optimizer = tf.keras.optimizers.SGD(
-            lr=0.01, decay=4e-5, momentum=0.9)
-
-        log.debug("Compiling model")
-
-        model.compile(
-            optimizer=optimizer,
-            loss={
-                'classification': classification_loss,
-                'regression': regression_loss,
-            },
-        )
-
-        # @TODO(ELI): Try loading the model outside the distribution scope
-
-        # loading weights must be done after compiling due to a TF issue
-        if args.restore:
-            checkpoint = tf.train.latest_checkpoint(args.checkpoints)
-
-            if checkpoint is None:
-                raise ValueError(
-                    "--restore option given but no previous checkpoint found to restore from.")
-
-            if args.weights:
-                raise ValueError(
-                    "--restore and --weights should not both be present.")
-
-            load_weights(model, checkpoint, args.phi, log)
-
-        else:
-            load_weights(model, args.weights, args.phi, log)
-
-        # freeze backbone layers
-        if args.freeze_backbone:
-            for i in range(1, EFFICIENTNET_DEPTHS[args.phi]):
-                model.layers[i].trainable = False
-
-        return model
-
-    start_session()
-
     if args.pu == "tpu":
         distribution_strategy = tpu.get_strategy()
     elif args.pu == "cpu":
@@ -290,9 +227,74 @@ def main(args=None):
 
     log.debug("Entering Distribution Strategy")
 
-    callbacks = get_callbacks(args)
+    start_session()
+    scope = distribution_strategy.scope()
 
-    with distribution_strategy.scope():
+    with scope:
+
+        model = efficientdet(
+            args.phi,
+            num_classes=num_classes,
+            just_training_model=True,
+            weighted_bifpn=args.weighted_bifpn,
+            freeze_bn=args.freeze_batchnorm)
+
+        log.debug("Built model")
+
+        # alpha and gamma values come from the EfficientDet paper
+        classification_loss = tpu.tpu_focal(alpha=0.25, gamma=1.5)
+        regression_loss = tpu.tpu_smooth_l1()
+
+        # The Optimizer
+        # See https://github.com/shaoanlu/dogs-vs-cats-redux/blob/master/opt_experiment.ipynb
+        # for benchmark of optimizers.
+        #
+        # These values come from the paper.
+        log.debug("Compiling model")
+        optimizer = tf.keras.optimizers.SGD(
+            lr=0.01, decay=4e-5, momentum=0.9)
+
+        # freeze backbone layers
+        if args.freeze_backbone:
+            for i in range(1, EFFICIENTNET_DEPTHS[args.phi]):
+                model.layers[i].trainable = False
+
+        model.compile(
+            optimizer=optimizer,
+            loss={
+                'classification': classification_loss,
+                'regression': regression_loss,
+            },
+        )
+
+        if args.restore:
+            checkpoints = glob.glob(os.path.join(args.checkpoints, "*.index"))
+
+            if len(checkpoints) == 0:
+                raise ValueError(
+                    "--restore option given but no previous "
+                    "checkpoint found to restore from.")
+
+            latest = max(checkpoints, key=os.path.getctime
+                         ).replace(".index", "")
+
+            # if index is included, then it assumes a v1 checkpoint
+            # tf.train.latest_checkpoint doesnt work because it assumes
+            # .write was used to create the checkpoint
+
+            log.debug("Restoring checkpoint %s", latest)
+            checkpoint = tf.train.Checkpoint(optimizer=optimizer, model=model)
+            status = checkpoint.restore(latest)
+
+            # the optimizer weights are not yet created
+            status.expect_partial()
+
+        elif args.restore and args.weights:
+            raise ValueError(
+                "--restore and --weights should not both be present.")
+        else:
+            load_weights(model, args.weights, args.phi, log)
+
         log.debug("Number of devices: %s",
                   distribution_strategy.num_replicas_in_sync)
 
@@ -301,14 +303,13 @@ def main(args=None):
 
         log.debug("Global Batch Size %s", global_batch_size)
 
-        model = build_model()
-        log.debug("Built model")
-
         train_data = input_data(
             global_batch_size, "gs://ondaka-ml-data/dev/run1/train")
         val_data = input_data(
             global_batch_size, "gs://ondaka-ml-data/dev/run1/val",
             validation=True)
+
+        callbacks = get_callbacks(args)
 
         # Fitting happens outside of scope
         log.debug("Fitting model")
@@ -321,14 +322,13 @@ def main(args=None):
             # Print porgress bar
             verbose=1,
 
+            epochs=args.epochs,
             steps_per_epoch=args.steps,
+            initial_epoch=args.initial_epoch,
 
-            # Last change
+            # Note: Validation does not seem to work on tpus
             validation_steps=steps_per_val_epoch,
             validation_data=val_data,
-
-            # Validation does not seem to work on tpus
-            epochs=args.epochs
         )
 
 
@@ -338,17 +338,6 @@ def get_callbacks(args):
     checkpoint_prefix = str(
         checkpoint_dir /
         "checkpoint_{epoch}_{val_loss}_{val_regression_loss}_{val_classification_loss}")
-
-    class Saver(tf.keras.callbacks.Callback):
-        # This seems to be faster than the tf.keras callback
-        def on_epoch_end(self, epoch, logs):
-            fname = checkpoint_prefix.format(epoch=epoch, **logs)
-            log.debug("saving to %s", fname)
-            self.model.save_weights(fname,
-                                    # Saving the whole things takes a long time
-                                    overwrite=True,
-                                    save_format="tf")
-            log.debug("saved %s", fname)
 
     # This is the schedule described in the paper
     warmup_and_decay_lr = get_cosine_decay_with_linear_warmup(
@@ -360,7 +349,7 @@ def get_callbacks(args):
 
     callbacks = [
         warmup_and_decay_lr,
-        Saver(),
+        CheckpointSaver(checkpoint_prefix, log),
     ]
 
     if args.log_dir:
