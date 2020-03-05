@@ -94,7 +94,7 @@ def preprocess(args):
 
         scaled_image, regression_target, labels_target = tf.numpy_function(
             preprocess_one_np, [image, bboxes, labels], Tout=(
-                tf.float32, tf.float32, tf.float32),
+                tf.uint8, tf.float32, tf.float32),
             name="preprocessExample"
         )
 
@@ -103,10 +103,7 @@ def preprocess(args):
         regression_target.set_shape(regression_target_shape)
         scaled_image.set_shape(scaled_image_shape)
 
-        # scale these back up because they will be stored as uints
-        rescaled_image = scaled_image * 255
-
-        return rescaled_image, regression_target, labels_target
+        return scaled_image, regression_target, labels_target
 
     dataset = tfds.load(args.dataset, split=split)
     dataset = dataset.map(preprocess_one, args.workers)
@@ -115,7 +112,7 @@ def preprocess(args):
     batches = batches.prefetch(1)
 
     for i, batch in enumerate(batches):
-        path = os.path.join(args.path, "{i:5d}.tfrecord".format(i=i))
+        path = os.path.join(args.path, "{i:05d}.tfrecord".format(i=i))
         print("Writing", path)
         write_batch(batch, path)
 
@@ -133,8 +130,6 @@ def _bytes_feature(value):
 def write_batch(batch, path):
     with tf.io.TFRecordWriter(path) as writer:
         for (image, regression, label) in zip(*batch):
-            # PNGs have to be uints
-            image = tf.cast(image, tf.uint8)
 
             feature = {
                 "image": _bytes_feature(tf.image.encode_png(image)),
@@ -147,12 +142,12 @@ def write_batch(batch, path):
 
             serialized_example = example_proto.SerializeToString()
 
-        writer.write(serialized_example)
+            writer.write(serialized_example)
 
 
 def check_values(image, regression_target, labels_target):
-    tf.compat.v1.debugging.assert_all_finite(
-        image, "Image contains NaN or Infinity")
+    # tf.compat.v1.debugging.assert_all_finite(
+    #     image, "Image contains NaN or Infinity")
 
     tf.compat.v1.debugging.assert_all_finite(
         regression_target, "Regression target contains NaN or Infinity")

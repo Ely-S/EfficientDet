@@ -38,8 +38,11 @@ def parse_args():
     parser.add_argument('--weighted-bifpn', help='Use weighted BiFPN',
                         action='store_true')
 
-    parser.add_argument('--dataset', default="voc",
-                        help='Train on this stock dataset. See: https://www.tensorflow.org/datasets/catalog/voc')
+    parser.add_argument('--dataset',
+                        help='A directory with train/ and val/ sub dirs. Can be a gs:// url.')
+
+    parser.add_argument('--num-classes', default=20, type=int,
+                        help='The number of classes to train for. Default is 20 for VOC.')
 
     parser.add_argument('--log-dir', type=str,
                         help='Destination for Tensorboard logs. '
@@ -125,16 +128,26 @@ def parse_args():
     return parsed_args
 
 
+mean = tf.constant([0.485, 0.456, 0.406])
+std = tf.constant([0.229, 0.224, 0.225])
+
+
+def normalize_image(image):
+    """
+    Normalize image by subtracting and dividing by the pre-computed
+    image-net mean and std. dev.
+    """
+    return ((image/255.0) - mean) / std
+
+
 def main(args=None):
     workers = args.workers
     batch_size = args.batch_size
-    datasetName = args.dataset
 
     image_size = image_sizes[args.phi]
     image_shape = (image_size, image_size)
 
-    info = tfds.builder(datasetName).info
-    num_classes = info.features['labels'].num_classes
+    num_classes = args.num_classes
 
     anchors = utils.anchors.anchors_for_shape(image_shape)
     labels_target_shape = tf.TensorShape((anchors.shape[0], num_classes + 1))
@@ -161,13 +174,14 @@ def main(args=None):
         label_target = tf.io.parse_tensor(
             example["label"], out_type=tf.float32)
 
-        image = tf.cast(png, tf.float32) / 255.0
-
         label_target.set_shape(labels_target_shape)
         regression_target.set_shape(regression_target_shape)
-        image.set_shape(scaled_image_shape)
+        png.set_shape(scaled_image_shape)
 
-        return image, (regression_target, label_target)
+        image = tf.cast(png, tf.float32)
+        normalized_image = normalize_image(image)
+
+        return normalized_image, (regression_target, label_target)
 
     def input_data(global_batch_size, folder, validation=False):
         files = tf.data.Dataset.list_files(os.path.join(folder, "*.tfrecord"))
@@ -303,11 +317,11 @@ def main(args=None):
 
         log.debug("Global Batch Size %s", global_batch_size)
 
-        train_data = input_data(
-            global_batch_size, "gs://ondaka-ml-data/dev/run1/train")
-        val_data = input_data(
-            global_batch_size, "gs://ondaka-ml-data/dev/run1/val",
-            validation=True)
+        train_dir = os.path.join(args.dataset, "train")
+        val_dir = os.path.join(args.dataset, "val")
+
+        train_data = input_data(global_batch_size, train_dir)
+        val_data = input_data(global_batch_size, val_dir, validation=True)
 
         callbacks = get_callbacks(args)
 
