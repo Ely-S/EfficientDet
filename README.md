@@ -22,7 +22,12 @@ This project is released under the Apache License. Please take their licenses in
 3. Other types please refer to [fizyr/keras-retinanet](https://github.com/fizyr/keras-retinanet))
 ### train
 * STEP1: `python3 train.py --snapshot imagenet --phi {0, 1, 2, 3, 4, 5, 6} --gpu 0 --random-transform --compute-val-loss --freeze-backbone --batch-size 32 --steps 1000 pascal|coco datasets/VOC2012|datasets/coco` to start training. The init lr is 1e-3.
-* STEP2: `python3 train.py --snapshot xxx.h5 --phi {0, 1, 2, 3, 4, 5, 6} --gpu 0 --random-transform --compute-val-loss --freeze-bn --batch-size 4 --steps 10000 pascal|coco datasets/VOC2012|datasets/coco` to start training when val mAP can not increase during STEP1. The init lr is 1e-4 and decays to 1e-5 when val mAP keeps dropping down.
+* STEP2: `python3 train.py --snapshot xxx.h5 --phi {0, 1, 2, 3, 4, 5, 6} --gpu 0 --random-transform --compute-val-loss --freeze-bn --batch-size 4 --steps 10000 pascal|coco datasets/VOC2012|datasets/coco` to start training when val mAP can not increase during STEP1. 
+
+
+
+
+The init lr is 1e-4 and decays to 1e-5 when val mAP keeps dropping down.
 ## Evaluate
 1. PASCAL VOC
     * `python3 eval/common.py` to evaluate pascal model by specifying model path there.

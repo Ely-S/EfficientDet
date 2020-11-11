@@ -9,46 +9,75 @@ from utils.anchors import anchors_for_shape
 import cv2
 import numpy as np
 
-parser = argparse.ArgumentParser(description='Process some integers.')
+parser = argparse.ArgumentParser(description="Process some integers.")
 
-parser.add_argument('--phi', type=int, required=True,
-                    help='phi constant between 0 and 7 inclusive')
+parser.add_argument(
+    "--phi", type=int, required=True, help="phi constant between 0 and 7 inclusive"
+)
 
-parser.add_argument('--cuda-visible-devices', default="",
-                    help='Set the GPU to use or default  to CPU')
+parser.add_argument(
+    "--cuda-visible-devices", default="", help="Set the GPU to use or default  to CPU"
+)
 
-parser.add_argument('--not-weighted', default=False,
-                    help='Run with an unweighted biFPN model.'
-                         'Defaults to use weighted BiFPN')
+parser.add_argument(
+    "--weighted",
+    default=False,
+    action="store_true",
+    help="Run with an weighted biFPN model." "Defaults to use unweighted BiFPN.",
+)
 
-parser.add_argument('--model', required=True,
-                    help='path to .h5 file')
+parser.add_argument("--model", required=True, help="path to .h5 file")
 
-parser.add_argument('image')
+parser.add_argument("image")
 
 args = parser.parse_args()
 
-os.environ['CUDA_VISIBLE_DEVICES'] = args.cuda_visible_devices
+os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda_visible_devices
 
-weighted_bifpn = not args.not_weighted
+if not args.weighted and "weighted" in args.model:
+    print("WARNING: model", args.model,
+          "might be weighted. If so, pass --weighted flag.")
+
+classes = [
+    "aeroplane",
+    "bicycle",
+    "bird",
+    "boat",
+    "bottle",
+    "bus",
+    "car",
+    "cat",
+    "chair",
+    "cow",
+    "diningtable",
+    "dog",
+    "horse",
+    "motorbike",
+    "person",
+    "pottedplant",
+    "sheep",
+    "sofa",
+    "train",
+    "tvmonitor",
+]
+
+num_classes = len(classes)  # 80
+
+score_threshold = 0.5
+colors = [np.random.randint(0, 256, 3).tolist() for i in range(num_classes)]
 
 image_sizes = (512, 640, 768, 896, 1024, 1280, 1408)
 image_size = image_sizes[args.phi]
 
-classes = [
-    'aeroplane', 'bicycle', 'bird', 'boat', 'bottle', 'bus', 'car', 'cat',
-    'chair', 'cow', 'diningtable', 'dog', 'horse', 'motorbike', 'person',
-    'pottedplant', 'sheep', 'sofa', 'train', 'tvmonitor',
-]
+anchors = anchors_for_shape((image_size, image_size))
 
-num_classes = len(classes)
-score_threshold = 0.5
-colors = [np.random.randint(0, 256, 3).tolist() for i in range(num_classes)]
-
-model, prediction_model = efficientdet(phi=args.phi,
-                                       weighted_bifpn=weighted_bifpn,
-                                       num_classes=num_classes,
-                                       score_threshold=score_threshold)
+model, prediction_model = efficientdet(
+    phi=args.phi,
+    weighted_bifpn=args.weighted,
+    num_classes=num_classes,
+    score_threshold=score_threshold,
+    anchors=anchors
+)
 
 prediction_model.load_weights(args.model, by_name=True)
 
@@ -66,13 +95,14 @@ image, scale, offset_h, offset_w = preprocess_image(
     image, image_size=image_size)
 
 inputs = np.expand_dims(image, axis=0)
-anchors = anchors_for_shape((image_size, image_size))
 
 # run network
 start = time.time()
 boxes_list, scores, labels = prediction_model.predict_on_batch(
-    [np.expand_dims(image, axis=0),
-     np.expand_dims(anchors, axis=0)])
+    [
+        np.expand_dims(image, axis=0),
+    ]
+)
 
 
 boxes = boxes_list[0]
@@ -120,23 +150,31 @@ for box, score, label in zip(detections, scores, labels):
     ymin = int(round(box[1]))
     xmax = int(round(box[2]))
     ymax = int(round(box[3]))
-    score = '{:.4f}'.format(score)
+    score = "{:.4f}".format(score)
     class_id = int(label)
     color = colors[class_id]
     class_name = classes[class_id]
-    label = '-'.join([class_name, score])
+    label = "-".join([class_name, score])
 
     ret, baseline = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
     cv2.rectangle(src_image, (xmin, ymin), (xmax, ymax), color, 1)
     cv2.rectangle(
-        src_image, (xmin, ymax - ret[1] - baseline), (xmin + ret[0], ymax),
-        color, -1)
+        src_image, (xmin, ymax - ret[1] -
+                    baseline), (xmin + ret[0], ymax), color, -1
+    )
 
-    cv2.putText(src_image, label, (xmin, ymax - baseline),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
+    cv2.putText(
+        src_image,
+        label,
+        (xmin, ymax - baseline),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.5,
+        (0, 0, 0),
+        1,
+    )
 
-cv2.namedWindow('image', cv2.WINDOW_NORMAL)
-cv2.imshow('image', src_image)
+cv2.namedWindow("image", cv2.WINDOW_NORMAL)
+cv2.imshow("image", src_image)
 cv2.waitKey(0)
 
 print("done")

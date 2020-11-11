@@ -106,8 +106,7 @@ def resize_image(image, image_size):
 
     # check if image needs to be resized
     if image_height == image_width == image_size:
-        new_image = image.astype(np.float32) / 255.0
-        return new_image, 0, 0, 0
+        return image, 0, 0, 0
 
     # scale the image dimensions to fit into the new size without distortion
     if image_height > image_width:
@@ -126,18 +125,14 @@ def resize_image(image, image_size):
     offset_w = (image_size - resized_width) // 2
 
     # Paste the input image into the center of a grey image of target size
-    new_image = np.ones((image_size, image_size, 3), dtype=np.float32) * 128.
+    new_image = 128 * np.ones((image_size, image_size, 3), dtype=image.dtype)
     new_image[offset_h:offset_h + resized_height,
-              offset_w:offset_w + resized_width] = image.astype(np.float32)
-
-    new_image /= 255.0
+              offset_w:offset_w + resized_width] = image
 
     return new_image, scale, offset_h, offset_w
 
 
 def preprocess_image(image, image_size):
     resized_image, scale, offset_h, offset_w = resize_image(image, image_size)
-
-    normalize_image(resized_image)
 
     return resized_image, scale, offset_h, offset_w
